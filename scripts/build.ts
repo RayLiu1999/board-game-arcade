@@ -42,6 +42,12 @@ await build({
 
 await build({
   ...browserOptions,
+  entryPoints: ["src/client/app.ts"],
+  outfile: "public/app.js",
+});
+
+await build({
+  ...browserOptions,
   entryPoints: ["src/riichi-worker.ts"],
   outfile: "public/riichi-worker.js",
 });

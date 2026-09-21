@@ -9,8 +9,8 @@
     "test": "tsx --test test/*.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint \"**/*.ts\" --max-warnings 0",
-    "format": "prettier --write lib/*.js src/**/*.ts scripts/*.ts public/app.js public/index.html public/style.css test/*.js docs/*.md README.md package.json tsconfig.json eslint.config.mjs",
-    "format:check": "prettier --check lib/*.js src/**/*.ts scripts/*.ts public/app.js public/index.html public/style.css test/*.js docs/*.md README.md package.json tsconfig.json eslint.config.mjs",
+    "format": "prettier --write lib/*.js src/**/*.ts scripts/*.ts public/index.html public/style.css test/*.js docs/*.md README.md package.json tsconfig.json eslint.config.mjs",
+    "format:check": "prettier --check lib/*.js src/**/*.ts scripts/*.ts public/index.html public/style.css test/*.js docs/*.md README.md package.json tsconfig.json eslint.config.mjs",
     "build": "tsx scripts/build.ts"
   },
   "dependencies": {

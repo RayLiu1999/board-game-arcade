@@ -89,7 +89,8 @@ src/shared/protocol.ts   WebSocket 訊息型別與 runtime parser
 src/shared/game-types.ts 共用 state、move 與 scoring 型別
 public/index.html        大廳、設定及對局畫面
 public/style.css         桌機與手機排版
-public/app.js            棋盤互動、儲存、AI 與房間生命週期
+src/client/app.ts        前端流程、狀態管理與 WebSocket 原始碼
+public/app.js            由 src/client/app.ts 產生的瀏覽器 bundle
 public/engine.js         由 src/shared/engine.ts 產生的瀏覽器 bundle
 public/shogi.js          由 src/shared/shogi.ts 產生的瀏覽器 bundle
 lib/riichi-session.js    日麻權威對局、合法選項與各座位私密視圖
@@ -98,9 +99,11 @@ src/client/riichi-ui.ts  日麻 UI renderer 原始碼
 public/riichi-ui.js      由 src/client/riichi-ui.ts 產生的 UI bundle
 src/riichi-worker.ts     本機日麻 Worker 來源
 public/riichi-worker.js  已打包的日麻 Worker
-scripts/build.ts         建置 shared bundle、日麻 Worker 與第三方授權
-public/ai.js             各棋種 AI 策略
-public/ai-worker.js      背景 AI 訊息介面
+scripts/build.ts         建置 shared/client bundle、日麻 Worker 與第三方授權
+src/client/ai.ts         各棋種 AI 策略原始碼
+public/ai.js             由 src/client/ai.ts 產生的瀏覽器 bundle
+src/client/ai-worker.ts  背景 AI 訊息介面原始碼
+public/ai-worker.js      由 src/client/ai-worker.ts 產生的 Worker bundle
 public/vendor/chess.js   鎖定的 chess.js 1.4.0 瀏覽器模組
 public/vendor/CHESS-LICENSE
 test/                   棋規與真實 WebSocket 整合測試

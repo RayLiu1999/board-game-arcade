@@ -50,8 +50,10 @@ interface FinalResult {
 
 type RiichiResult = HuleResult | PingjuResult | FinalResult;
 
-interface RiichiView {
+export interface RiichiView {
+  readonly game?: "riichi";
   readonly phase: "waiting" | "play" | "finished";
+  readonly winner: number | null;
   readonly paused: boolean;
   readonly seat?: number;
   readonly wind: number;
@@ -76,13 +78,13 @@ interface RoomPlayer {
   readonly bot?: boolean;
 }
 
-interface RoomView {
+export interface RoomView {
   readonly code?: string;
   readonly players?: Array<RoomPlayer | null>;
   readonly rematch?: number[];
 }
 
-interface RenderOptions {
+export interface RenderOptions {
   readonly mode: string;
   readonly room: RoomView | null;
   readonly human: number;

@@ -58,7 +58,7 @@ TypeScript 品質門檻：
 ```text
 瀏覽器
 ├─ index.html / style.css       畫面骨架與視覺樣式
-├─ app.js                       前端流程與狀態管理
+├─ app.js                       由 src/client/app.ts 建置的前端 bundle
 ├─ engine.js / shogi.js         一般棋類規則
 ├─ ai-worker.js → ai.js         一般棋類 AI
 └─ riichi-worker.js             由 src/riichi-worker.ts 打包的本機日麻執行環境
@@ -76,10 +76,10 @@ Node.js src/server/server.ts
 
 ```text
 使用者點擊棋盤
-→ app.js 取得操作
+→ public/app.js（來源為 src/client/app.ts）取得操作
 → engine.js 的 legalMoves() 驗證合法走法
 → applyMove() 產生下一個狀態
-→ app.js 重新 render
+→ public/app.js 重新 render
 → 若是 AI 回合，交給 ai-worker.js
 ```
 
@@ -119,11 +119,12 @@ majiang-core 推進牌局事件
 
 - `index.html`：頁面骨架、大廳、棋盤與日麻牌桌容器
 - `style.css`：桌面版、手機版與所有視覺樣式
-- `app.js`：前端應用流程、模式切換、狀態管理與 WebSocket
+- `src/client/app.ts`：前端應用流程、模式切換、狀態管理與 WebSocket 原始碼
+- `app.js`：由 `src/client/app.ts` 建置出的瀏覽器 bundle
 - `engine.js`：由 `src/shared/engine.ts` 建置出的瀏覽器規則 bundle
 - `shogi.js`：由 `src/shared/shogi.ts` 建置出的將棋 bundle
 - `ai.js`：一般棋類 AI 決策
-- `ai-worker.js`：一般棋類 AI 的背景執行介面
+- `ai-worker.js`：由 `src/client/ai-worker.ts` 建置的一般棋類 AI 背景執行介面
 - `riichi-ui.js`：由 `src/client/riichi-ui.ts` 建置出的日麻 UI 渲染 bundle
 - `riichi-worker.js`：由 `src/riichi-worker.ts` 打包產生的瀏覽器成品
 - `vendor/`：瀏覽器端第三方檔案與授權檔
@@ -157,7 +158,7 @@ public/engine.js / public/shogi.js / public/riichi-worker.js
 
 `scripts/build.ts` 只在開發或部署時執行，負責：
 
-- 打包 shared TypeScript bundle
+- 打包 shared 與 client TypeScript bundle
 - 打包日麻 Worker
 - 將 npm 依賴轉成瀏覽器可執行格式
 - 複製第三方授權檔
