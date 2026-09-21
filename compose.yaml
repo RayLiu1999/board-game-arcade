@@ -1,0 +1,52 @@
+name: qiju
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: >-
+        postgresql://${QIJU_POSTGRES_USER:-qiju}:${QIJU_POSTGRES_PASSWORD:-qiju-local-password}@postgres:5432/${QIJU_POSTGRES_DB:-qiju}
+    init: true
+    ports:
+      - "${QIJU_PORT:-3000}:3000"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3000/').then((response) =>
+          process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${QIJU_POSTGRES_DB:-qiju}
+      POSTGRES_PASSWORD: ${QIJU_POSTGRES_PASSWORD:-qiju-local-password}
+      POSTGRES_USER: ${QIJU_POSTGRES_USER:-qiju}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - qiju-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  qiju-postgres-data:
