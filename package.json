@@ -7,9 +7,11 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "test": "node --test",
-    "format": "prettier --write server.js lib/*.js src/*.js scripts/*.js public/{app,engine,ai,ai-worker,shogi,riichi-ui}.js public/{index.html,style.css} test/*.js README.md package.json",
-    "format:check": "prettier --check server.js lib/*.js src/*.js scripts/*.js public/{app,engine,ai,ai-worker,shogi,riichi-ui}.js public/{index.html,style.css} test/*.js README.md package.json",
-    "build": "node scripts/build-riichi.js"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"**/*.ts\" --max-warnings 0",
+    "format": "prettier --write server.js lib/*.js src/**/*.{js,ts} scripts/*.ts public/app.js public/ai.js public/ai-worker.js public/riichi-ui.js public/index.html public/style.css test/*.js docs/*.md README.md package.json tsconfig.json eslint.config.mjs",
+    "format:check": "prettier --check server.js lib/*.js src/**/*.{js,ts} scripts/*.ts public/app.js public/ai.js public/ai-worker.js public/riichi-ui.js public/index.html public/style.css test/*.js docs/*.md README.md package.json tsconfig.json eslint.config.mjs",
+    "build": "tsx scripts/build.ts"
   },
   "dependencies": {
     "@kobalab/majiang-ai": "1.2.0",
@@ -18,7 +20,14 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.2",
+    "@types/ws": "^8.18.1",
     "esbuild": "^0.28.2",
-    "prettier": "^3.6.2"
+    "eslint": "^10.11.0",
+    "prettier": "^3.6.2",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.70.0"
   }
 }

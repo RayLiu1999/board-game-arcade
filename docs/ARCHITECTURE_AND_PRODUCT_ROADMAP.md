@@ -10,6 +10,32 @@
 - 測試：`npm test` 通過 45 個測試
 - 執行環境：Node.js 22 或更新版本
 
+### TS-first 決策
+
+後續實作採 TypeScript-first，而不是先完成一套 JavaScript 架構再搬遷。所有新的核心程式、伺服器、Worker 與測試優先使用 `.ts`；既有 JavaScript 會依照依賴關係逐層轉換，最後只保留瀏覽器實際載入的建置產物。
+
+目標目錄：
+
+```text
+src/
+├─ client/       app、AI、UI 與瀏覽器 Worker 原始碼
+├─ server/       HTTP、WebSocket、房間服務
+├─ shared/       一般棋類規則、狀態與通訊型別
+└─ riichi/       日麻 session 與 Worker 原始碼
+
+scripts/         TypeScript 建置與開發工具
+test/            TypeScript 規則、整合與 E2E 測試
+public/          HTML、CSS、圖片與瀏覽器建置產物
+```
+
+TypeScript 品質門檻：
+
+- `strict: true`
+- 不以 `any` 作為未完成型別的暫時替代品
+- 外部無型別套件使用明確的 typed facade 或 `unknown` 邊界
+- server、client、Worker 與 test 共用明確的 state／message schema
+- CI 必須通過 typecheck、lint、format、build 與測試
+
 ---
 
 ## 1. 專案定位
@@ -349,6 +375,43 @@ AI 的搜尋會呼叫同一套 `applyMove()`，因此能正確處理連跳狀態
 ---
 
 ## 5. 技術優化路線
+
+### P0 的 TS-first 實作順序
+
+P0 不採取「先把所有檔案改名成 `.ts`，最後才處理型別」的方式，而是先建立可持續的編譯與品質門檻，再依照依賴方向遷移：
+
+```text
+TS 工具鏈與 CI
+→ shared state／message 型別
+→ 一般棋類 domain
+→ server 與房間服務
+→ AI 與 Worker
+→ client UI
+→ 測試全部轉 TS
+```
+
+預計新增：
+
+- `tsconfig.json`：NodeNext、strict、noImplicitOverride 與 noUncheckedIndexedAccess
+- ESLint TypeScript 規則
+- `tsx`：開發與 TypeScript 測試執行
+- `@types/node`、`@types/ws` 與外部套件的 typed facade
+- client／server／Worker 的 esbuild entry points
+- CI 的 typecheck、lint、format、build、unit／integration gate
+
+### P0 測試策略
+
+依照風險分層：
+
+| 層級        | 防線                                | 目標                                    |
+| ----------- | ----------------------------------- | --------------------------------------- |
+| Static      | TypeScript strict、ESLint、Prettier | 捕捉型別、匯入與低階錯誤                |
+| Unit        | `node:test`                         | 純棋規、validator、reducer、AI 評分邏輯 |
+| Integration | Node/WebSocket 與瀏覽器互動測試     | 驗證狀態流、房間與使用者操作結果        |
+| E2E         | Playwright                          | 少量關鍵流程，例如建立房間、對局、重連  |
+| Visual      | Playwright screenshot（可選）       | 只在棋盤與響應式版面成為主要風險時啟用  |
+
+核心原則是測可觀察行為，而不是測函式內部實作。例如 UI 測試應驗證玩家點擊合法位置後棋盤、回合提示與歷史紀錄的變化，不應只驗證某個內部變數被設定。
 
 ### P0：可靠性與可維護性
 
