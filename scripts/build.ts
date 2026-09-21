@@ -24,6 +24,18 @@ await build({
 
 await build({
   ...browserOptions,
+  entryPoints: ["src/client/ai.ts"],
+  outfile: "public/ai.js",
+});
+
+await build({
+  ...browserOptions,
+  entryPoints: ["src/client/ai-worker.ts"],
+  outfile: "public/ai-worker.js",
+});
+
+await build({
+  ...browserOptions,
   entryPoints: ["src/riichi-worker.js"],
   outfile: "public/riichi-worker.js",
 });
