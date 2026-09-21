@@ -1,38 +1,16 @@
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
-import { WebSocket, WebSocketServer, type RawData } from "ws";
+import { WebSocketServer, type RawData, type WebSocket } from "ws";
 
-import { RiichiSession } from "../../lib/riichi-session.js";
 import { applyMove, createGame, scoringAction } from "../shared/engine.js";
-import {
-  parseClientMessage,
-  type ClientMessage,
-  type PlayerSide,
-} from "../shared/protocol.js";
-import type {
-  ClientSocket,
-  RiichiSide,
-  Room,
-  RoomPlayer,
-  RoomState,
-  SocketSide,
-} from "./room-types.js";
+import { parseClientMessage, type PlayerSide } from "../shared/protocol.js";
+import type { ClientSocket, SocketSide } from "./room-types.js";
 import { createStaticHttpServer, parsePort } from "./http-server.js";
+import { RoomManager, send } from "./room-manager.js";
 
 const asClientSocket = (socket: WebSocket): ClientSocket =>
   socket as ClientSocket;
-
-const send = (socket: ClientSocket, data: unknown): void => {
-  if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(data));
-};
-
-const roomSide = (state: RoomState, index: number): SocketSide => {
-  if (state.game !== "riichi") return index === 0 ? 1 : -1;
-  const side = index + 1;
-  if (side < 1 || side > 4) throw new Error("無效座位");
-  return side as RiichiSide;
-};
 
 const boardSide = (side: SocketSide): PlayerSide => {
   if (side === 1 || side === -1) return side;
@@ -44,9 +22,6 @@ const seatIndex = (side: SocketSide): number => {
   return side - 1;
 };
 
-const normalizeName = (value: string | undefined, index: number): string =>
-  value?.trim().slice(0, 20) || `玩家 ${String(index + 1)}`;
-
 const rawText = (raw: RawData): string => {
   if (Buffer.isBuffer(raw)) return raw.toString("utf8");
   if (Array.isArray(raw)) return Buffer.concat(raw).toString("utf8");
@@ -54,150 +29,11 @@ const rawText = (raw: RawData): string => {
 };
 
 export function createServer() {
-  const rooms = new Map<string, Room>();
+  const roomManager = new RoomManager();
+  const { rooms } = roomManager;
   const server = createStaticHttpServer();
 
   const wss = new WebSocketServer({ server, maxPayload: 8192 });
-
-  const broadcast = (room: Room): void => {
-    room.players.forEach((player, index) => {
-      if (!player?.socket) return;
-      send(player.socket, {
-        type: "state",
-        code: room.code,
-        side: roomSide(room.state, index),
-        state: room.session ? room.session.view(index) : room.state,
-        players: room.players.map((entry) =>
-          entry
-            ? {
-                name: entry.name,
-                online: Boolean(entry.socket) || Boolean(entry.bot),
-                bot: Boolean(entry.bot),
-              }
-            : null,
-        ),
-        rematch: room.rematch,
-      });
-    });
-  };
-
-  const ready = (room: Room): boolean =>
-    room.players.every((player) =>
-      Boolean(player && (player.bot || player.socket)),
-    );
-
-  const startRiichi = (room: Room): void => {
-    if (room.session) return;
-    room.session = new RiichiSession({
-      humans: room.players.flatMap((player, index) =>
-        player && !player.bot ? [index] : [],
-      ),
-      rounds: room.rounds,
-      names: room.players.map(
-        (player, index) => player?.name ?? `玩家 ${String(index + 1)}`,
-      ),
-      onChange: () => {
-        if (!room.session) return;
-        room.state = {
-          game: "riichi",
-          winner: room.session.done
-            ? (room.session.result?.rank?.indexOf(1) ?? -1) + 1
-            : null,
-          ply: room.session.revision,
-        };
-        room.touched = Date.now();
-        broadcast(room);
-      },
-      onError: () => {
-        room.players.forEach((player) => {
-          if (player?.socket)
-            send(player.socket, {
-              type: "error",
-              message: "日麻對局暫停，請重新建立房間",
-            });
-        });
-      },
-    });
-    room.session.start();
-  };
-
-  const detach = (socket: ClientSocket): void => {
-    if (!socket.room) return;
-    const room = rooms.get(socket.room);
-    if (!room) {
-      socket.room = null;
-      return;
-    }
-    const player = room.players.find((entry) => entry?.socket === socket);
-    if (player) {
-      player.socket = null;
-      room.session?.pause(true);
-      room.touched = Date.now();
-      broadcast(room);
-    }
-    socket.room = null;
-  };
-
-  const handleRoomEntry = (
-    socket: ClientSocket,
-    message: Extract<ClientMessage, { type: "create" | "join" }>,
-  ): void => {
-    if (socket.room) throw new Error("請先離開目前房間");
-    let room: Room;
-    let index: number;
-    if (message.type === "create") {
-      if (rooms.size >= 500) throw new Error("房間已滿，請稍後再試");
-      const state = createGame(message.game, message.size);
-      const rounds =
-        message.rounds !== undefined && [0, 1, 2].includes(message.rounds)
-          ? message.rounds
-          : 1;
-      let code: string;
-      do {
-        code = randomBytes(4).toString("hex").slice(0, 6).toUpperCase();
-      } while (rooms.has(code));
-      room = {
-        code,
-        state,
-        players: Array<RoomPlayer | null>(
-          message.game === "riichi" ? 4 : 2,
-        ).fill(null),
-        rounds,
-        rematch: [],
-        touched: Date.now(),
-        session: null,
-      };
-      rooms.set(code, room);
-      index = 0;
-    } else {
-      const joinedRoom = rooms.get(message.code.toUpperCase());
-      if (!joinedRoom) throw new Error("找不到房間，請確認房間代碼");
-      room = joinedRoom;
-      index = room.players.findIndex((player) =>
-        Boolean(player?.token && player.token === message.token),
-      );
-      if (index < 0) index = room.players.findIndex((player) => !player);
-      if (index < 0) throw new Error("房間已滿");
-    }
-
-    const existing = room.players[index];
-    if (existing?.socket && existing.socket !== socket) {
-      existing.socket.room = null;
-      existing.socket.close(4001, "Session replaced");
-    }
-    const token = existing?.token ?? randomBytes(24).toString("hex");
-    const name = existing?.name ?? normalizeName(message.name, index);
-    room.players[index] = { name, token, socket };
-    socket.room = room.code;
-    socket.side = roomSide(room.state, index);
-    room.touched = Date.now();
-    send(socket, { type: "joined", code: room.code, token, side: socket.side });
-    if (room.state.game === "riichi" && ready(room)) {
-      if (room.session) room.session.pause(false);
-      else startRiichi(room);
-    }
-    broadcast(room);
-  };
 
   wss.on("connection", (rawSocket) => {
     const socket = asClientSocket(rawSocket);
@@ -219,11 +55,11 @@ export function createServer() {
         if (count > 40) throw new Error("操作過於頻繁");
         const message = parseClientMessage(JSON.parse(rawText(raw)) as unknown);
         if (message.type === "create" || message.type === "join") {
-          handleRoomEntry(socket, message);
+          roomManager.handleEntry(socket, message);
           return;
         }
         if (message.type === "leave") {
-          detach(socket);
+          roomManager.detach(socket);
           send(socket, { type: "left" });
           return;
         }
@@ -249,11 +85,11 @@ export function createServer() {
                 bot: true,
               },
           );
-          startRiichi(room);
+          roomManager.startRiichi(room);
           return;
         }
 
-        if (!ready(room)) throw new Error("等待對手連線");
+        if (!roomManager.isReady(room)) throw new Error("等待對手連線");
         if (message.type === "riichi-action") {
           if (room.state.game !== "riichi" || !room.session)
             throw new Error("日麻尚未開局");
@@ -303,14 +139,14 @@ export function createServer() {
             if (room.state.game === "riichi") {
               room.session?.close();
               room.session = null;
-              startRiichi(room);
+              roomManager.startRiichi(room);
             } else {
               room.state = createGame(room.state.game, room.state.rows);
             }
           }
         }
         room.touched = Date.now();
-        broadcast(room);
+        roomManager.broadcast(room);
       } catch (error: unknown) {
         send(socket, {
           type: "error",
@@ -319,7 +155,7 @@ export function createServer() {
       }
     });
     socket.on("close", () => {
-      detach(socket);
+      roomManager.detach(socket);
     });
     socket.on("error", () => {});
   });
@@ -334,20 +170,12 @@ export function createServer() {
       socket.alive = false;
       socket.ping();
     }
-    for (const [code, room] of rooms) {
-      if (
-        !room.players.some((player) => Boolean(player?.socket)) &&
-        Date.now() - room.touched > 30 * 60 * 1000
-      ) {
-        room.session?.close();
-        rooms.delete(code);
-      }
-    }
+    roomManager.pruneInactive();
   }, 30000);
   timer.unref();
   server.on("close", () => {
     clearInterval(timer);
-    for (const room of rooms.values()) room.session?.close();
+    roomManager.closeAll();
     wss.close();
   });
   return { server, wss, rooms };
