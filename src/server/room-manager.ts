@@ -65,7 +65,9 @@ export class RoomManager {
 
   private async restore(): Promise<void> {
     await this.store.initialize();
-    const snapshots = await this.store.load(this.now());
+    const now = this.now();
+    await this.store.pruneExpired(now, []);
+    const snapshots = await this.store.load(now);
     for (const snapshot of snapshots)
       this.rooms.set(snapshot.code, restore(snapshot));
   }
@@ -332,6 +334,7 @@ export class RoomManager {
         }
       });
     }
+    await this.store.pruneExpired(now, [...this.rooms.keys()]);
   }
 
   async closeAll(): Promise<void> {

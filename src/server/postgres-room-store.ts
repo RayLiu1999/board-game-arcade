@@ -157,6 +157,20 @@ export class PostgresRoomStore implements RoomStore {
     return [...rooms.values()];
   }
 
+  async pruneExpired(
+    now: number,
+    activeCodes: readonly string[],
+  ): Promise<void> {
+    await this.pool.query(
+      `
+        DELETE FROM qiju_rooms
+        WHERE expires_at <= to_timestamp($1 / 1000.0)
+          AND NOT (code = ANY($2::varchar[]))
+      `,
+      [now, [...activeCodes]],
+    );
+  }
+
   async create(snapshot: RoomSnapshot): Promise<void> {
     await this.transaction(async (client) => {
       await client.query(

@@ -22,6 +22,7 @@ export interface RoomSnapshot {
 export interface RoomStore {
   initialize(): Promise<void>;
   load(now: number): Promise<RoomSnapshot[]>;
+  pruneExpired(now: number, activeCodes: readonly string[]): Promise<void>;
   create(snapshot: RoomSnapshot): Promise<void>;
   update(snapshot: RoomSnapshot, expectedRevision: number): Promise<number>;
   delete(code: string): Promise<void>;
@@ -51,6 +52,16 @@ export class MemoryRoomStore implements RoomStore {
         .filter((snapshot) => snapshot.expiresAt > now)
         .map(clone),
     );
+  }
+
+  pruneExpired(now: number, activeCodes: readonly string[]): Promise<void> {
+    return Promise.resolve().then(() => {
+      const active = new Set(activeCodes);
+      for (const [code, snapshot] of this.snapshots) {
+        if (snapshot.expiresAt <= now && !active.has(code))
+          this.snapshots.delete(code);
+      }
+    });
   }
 
   create(snapshot: RoomSnapshot): Promise<void> {

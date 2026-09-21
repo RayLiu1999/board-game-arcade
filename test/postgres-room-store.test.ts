@@ -81,5 +81,12 @@ if (!databaseUrl) {
     assert.equal(saved.revision, 1);
     assert.deepEqual(saved.state, next);
     assert.deepEqual(await store.load(saved.expiresAt + 1), []);
+
+    await store.pruneExpired(saved.expiresAt + 1, []);
+    await store.create({
+      ...snapshot,
+      touched: saved.expiresAt + 2,
+      expiresAt: saved.expiresAt + 2 + ROOM_TTL_MS,
+    });
   });
 }
