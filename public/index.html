@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#142e2a" />
+    <meta
+      name="description"
+      content="棋聚：八款經典棋類，AI 練習、同機雙人與線上好友對弈。"
+    />
+    <title>棋聚 QIJU — 每一步，都有意思</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="棋聚首頁"
+        ><span class="brand-mark">棋</span
+        ><span>棋聚<small>Q I J U</small></span></a
+      >
+      <div class="side-caption">PLAY YOUR NEXT MOVE</div>
+      <nav>
+        <button class="nav-item active" id="nav-lobby">
+          <span>▦</span> 遊戲大廳 <i>08</i></button
+        ><button class="nav-item" id="nav-friends">
+          <span>♧</span> 好友對戰 <span class="small-dot"></span></button
+        ><button class="nav-item" id="nav-rules">
+          <span>▤</span> 遊戲指南
+        </button>
+      </nav>
+      <div class="sidebar-note">
+        <span class="note-grid">✦</span>
+        <h3>好棋，值得慢慢下。</h3>
+        <p>從第一步開始，<br />找到屬於你的節奏。</p>
+        <div class="note-line"></div>
+        <small>THINK · PLAY · CONNECT</small>
+      </div>
+      <div class="profile">
+        <div class="avatar">訪</div>
+        <div>訪客棋手<small>不必註冊，即刻開局</small></div>
+        <span class="profile-dot"></span>
+      </div>
+    </aside>
+    <div class="main-shell">
+      <header class="topbar">
+        <div class="breadcrumb">
+          棋聚俱樂部 <span>/</span> <strong id="crumb">遊戲大廳</strong>
+        </div>
+        <div class="header-actions">
+          <span class="availability"><span></span> 隨時來一局</span
+          ><button id="header-join" class="button small outline">
+            加入房間 <span>↗</span>
+          </button>
+        </div>
+      </header>
+      <main id="lobby">
+        <section class="hero">
+          <div class="hero-copy">
+            <div class="eyebrow"><span></span> A PLACE FOR EVERY PLAYER</div>
+            <h1>每一步，<br />都有<span>意思。</span></h1>
+            <p>八款經典，一個棋聚。<br />與 AI 切磋，或邀好友，下一場好棋。</p>
+            <button class="button light" id="quick-play">
+              開始一局 <span>↗</span>
+            </button>
+            <div class="hero-foot">
+              <span class="mini-stones">●<i>●</i></span>
+              一個人練習，好友同桌更有趣
+            </div>
+          </div>
+          <div class="hero-art" aria-hidden="true">
+            <span class="art-orbit one"></span
+            ><span class="art-orbit two"></span>
+            <div class="art-label">THE NEXT MOVE<br />IS YOURS.</div>
+            <div class="decor-board" id="decor-board"></div>
+            <div class="floating-piece">♞</div>
+            <div class="art-caption"><span>01 — 08</span> 無限種可能</div>
+          </div>
+        </section>
+        <section class="collection">
+          <div class="section-heading">
+            <div>
+              <div class="eyebrow dark">THE COLLECTION</div>
+              <h2>選一盤，開始吧<span>八種玩法，各有精彩</span></h2>
+            </div>
+            <div class="filter-tabs" role="group" aria-label="棋類分類">
+              <button data-filter="all" class="active">全部棋種</button
+              ><button data-filter="easy">輕鬆入門</button
+              ><button data-filter="strategy">深度策略</button>
+            </div>
+          </div>
+          <div class="game-grid" id="game-grid"></div>
+        </section>
+        <section class="invite-strip">
+          <div class="invite-icon">♧</div>
+          <div>
+            <h3>好對手，就在好友之中。</h3>
+            <p>建立專屬房間，分享代碼，讓下一盤成為你們的共同回憶。</p>
+          </div>
+          <button class="button outline" id="invite-button">
+            邀請好友 <span>↗</span>
+          </button>
+        </section>
+        <footer>
+          <span>棋聚 QIJU <i>・</i> 為每一個喜歡思考的你</span
+          ><span>慢一點，也是一種策略。 ♟</span>
+        </footer>
+      </main>
+      <main id="play-screen" hidden>
+        <div class="play-heading">
+          <button class="back-link" id="back-lobby">← 返回大廳</button
+          ><span id="mode-badge" class="tag"></span>
+        </div>
+        <section id="riichi-table" hidden></section>
+        <div class="play-layout">
+          <section class="board-panel">
+            <div class="board-title">
+              <div>
+                <div class="eyebrow dark" id="game-en"></div>
+                <h1 id="game-title"></h1>
+              </div>
+              <button class="icon-button" id="game-help" aria-label="檢視規則">
+                ?
+              </button>
+            </div>
+            <div class="player-row" id="opponent-row"></div>
+            <div id="opponent-hand" class="shogi-hand" hidden></div>
+            <div class="board-wrap">
+              <div id="board" role="group" aria-label="棋盤"></div>
+            </div>
+            <div id="self-hand" class="shogi-hand" hidden></div>
+            <div class="player-row" id="self-row"></div>
+            <div class="board-tip" id="board-tip">點選棋盤開始對弈</div>
+          </section>
+          <aside class="match-panel">
+            <section class="match-status">
+              <div class="eyebrow dark">THE MATCH</div>
+              <h2 id="turn-title" aria-live="polite"></h2>
+              <p id="turn-detail"></p>
+              <div id="room-info" hidden>
+                <div class="room-code-line">
+                  <span id="room-code"></span
+                  ><button
+                    id="copy-room"
+                    class="icon-button"
+                    aria-label="複製邀請連結"
+                  >
+                    ⧉
+                  </button>
+                </div>
+                <small>分享連結，邀請朋友加入</small>
+              </div>
+              <div id="score-info"></div>
+              <div class="match-actions">
+                <button class="button primary" id="pass-button" hidden>
+                  停一手</button
+                ><button class="button primary" id="accept-score" hidden>
+                  確認數子</button
+                ><button class="button outline" id="resume-button" hidden>
+                  繼續對局</button
+                ><button class="button outline" id="undo-button">悔棋</button
+                ><button class="button outline" id="restart-button">
+                  重新開局</button
+                ><button class="text-button" id="resign-button">認輸</button>
+              </div>
+            </section>
+            <section class="history-panel">
+              <div class="history-heading">
+                <h3>對局紀錄</h3>
+                <span id="move-count">0 手</span>
+              </div>
+              <div id="history" aria-label="對局紀錄"></div>
+            </section>
+            <div class="fair-note">✧ 每一步思考，都是進步。</div>
+          </aside>
+        </div>
+      </main>
+    </div>
+    <dialog id="setup-dialog">
+      <form id="setup-form">
+        <button type="button" class="close-dialog" aria-label="關閉">×</button>
+        <div class="eyebrow dark">LET’S PLAY</div>
+        <h2 id="setup-title">開始對弈</h2>
+        <p class="dialog-subtitle" id="setup-desc"></p>
+        <label>對戰模式</label>
+        <div class="mode-options">
+          <button type="button" class="mode-option active" data-mode="ai">
+            <span>✦</span>AI 對戰<small>隨時練習</small></button
+          ><button type="button" class="mode-option" data-mode="local">
+            <span>♟</span>同機雙人<small>面對面對弈</small></button
+          ><button type="button" class="mode-option" data-mode="online">
+            <span>♧</span>線上好友<small>建立私人房間</small>
+          </button>
+        </div>
+        <div id="ai-options" class="form-grid">
+          <div>
+            <label for="difficulty">AI 難度</label
+            ><select id="difficulty">
+              <option value="easy">入門 · 輕鬆練習</option>
+              <option value="medium" selected>標準 · 攻守兼備</option>
+              <option value="hard">進階 · 深入思考</option>
+            </select>
+          </div>
+          <div>
+            <label for="side-choice">你的陣營</label
+            ><select id="side-choice">
+              <option value="1">先手</option>
+              <option value="-1">後手</option>
+            </select>
+          </div>
+        </div>
+        <div id="go-options" hidden>
+          <label for="board-size">棋盤大小</label
+          ><select id="board-size">
+            <option value="9">9 路 · 快速對局</option>
+            <option value="13">13 路 · 進階挑戰</option>
+            <option value="19">19 路 · 完整棋盤</option>
+          </select>
+        </div>
+        <div id="riichi-options" hidden>
+          <label for="riichi-rounds">對局長度</label
+          ><select id="riichi-rounds">
+            <option value="0">單局練習 · 結算後結束</option>
+            <option value="1" selected>東風戰 · 東一至東四</option>
+            <option value="2">半莊戰 · 東場與南場</option>
+          </select>
+        </div>
+        <div id="name-options" hidden>
+          <label for="player-name">棋手暱稱</label
+          ><input
+            id="player-name"
+            maxlength="20"
+            placeholder="訪客棋手"
+            autocomplete="nickname"
+          />
+        </div>
+        <p class="setup-note" id="setup-note">
+          AI 在你的裝置上思考，不需註冊。
+        </p>
+        <button type="submit" class="button primary full" id="start-button">
+          開始對弈 <span>→</span>
+        </button>
+      </form>
+    </dialog>
+    <dialog id="join-dialog">
+      <form id="join-form">
+        <button type="button" class="close-dialog" aria-label="關閉">×</button>
+        <div class="eyebrow dark">PLAY TOGETHER</div>
+        <h2>和好友，下一盤。</h2>
+        <p class="dialog-subtitle">輸入朋友分享的 6 碼房間代碼。</p>
+        <label for="join-code">房間代碼</label
+        ><input
+          id="join-code"
+          placeholder="例如 A3F82B"
+          maxlength="6"
+          pattern="[A-Fa-f0-9]{6}"
+          required
+          autocomplete="off"
+        /><label for="join-name">棋手暱稱</label
+        ><input
+          id="join-name"
+          maxlength="20"
+          placeholder="訪客棋手"
+          autocomplete="nickname"
+        /><button class="button primary full" type="submit">
+          加入房間 <span>→</span>
+        </button>
+        <p class="setup-note">朋友需連到同一台伺服器；跨網路遊玩需先部署。</p>
+      </form>
+    </dialog>
+    <dialog id="rules-dialog">
+      <button class="close-dialog" aria-label="關閉">×</button>
+      <div class="eyebrow dark">A LITTLE GUIDE</div>
+      <h2>每款棋，都有樂趣。</h2>
+      <div id="rules-content"></div>
+    </dialog>
+    <dialog id="confirm-dialog">
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-text"></p>
+      <div class="confirm-actions">
+        <button class="button outline" id="confirm-no">取消</button
+        ><button class="button primary" id="confirm-yes">確定</button>
+      </div>
+    </dialog>
+    <dialog id="promotion-dialog">
+      <h2>選擇升變棋子</h2>
+      <p>兵已抵達底線，選擇你的新棋子。</p>
+      <div id="promotion-options"></div>
+    </dialog>
+    <div id="toast" role="status" hidden></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

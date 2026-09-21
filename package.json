@@ -1,0 +1,24 @@
+{
+  "name": "qiju-board-game-arcade",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test",
+    "format": "prettier --write server.js lib/*.js src/*.js scripts/*.js public/{app,engine,ai,ai-worker,shogi,riichi-ui}.js public/{index.html,style.css} test/*.js README.md package.json",
+    "format:check": "prettier --check server.js lib/*.js src/*.js scripts/*.js public/{app,engine,ai,ai-worker,shogi,riichi-ui}.js public/{index.html,style.css} test/*.js README.md package.json",
+    "build": "node scripts/build-riichi.js"
+  },
+  "dependencies": {
+    "@kobalab/majiang-ai": "1.2.0",
+    "@kobalab/majiang-core": "1.4.1",
+    "chess.js": "^1.4.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "prettier": "^3.6.2"
+  }
+}
