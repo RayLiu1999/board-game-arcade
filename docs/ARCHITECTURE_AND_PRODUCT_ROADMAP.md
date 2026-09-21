@@ -500,21 +500,27 @@ P0 程式碼已落地：有設定 `DATABASE_URL` 時使用線上 PostgreSQL 作�
 
 P0 的程式碼完成條件已具備：一般棋類房間在 Node 程序重啟後可恢復並繼續遊玩，敏感 token 不以明文存於資料庫，且有 PostgreSQL adapter 與完整 server restart integration test。GitHub Actions 已啟動 PostgreSQL service 執行這兩項真實資料庫測試；本機若要執行，請在專用測試資料庫設定 `QIJU_TEST_DATABASE_URL`。
 
-##### P1 計畫：第 4～5 項
+##### P1 目前進度：第 4 項完成，第 5 項暫緩
 
 4. **日麻 `snapshot()`／`restore()` 或 event replay**
    - 不直接序列化 `Majiang.Game`、timer、queue 或 callback。
-   - 評估以可驗證的 snapshot 還原，或以初始 seed／牌局事件／真人 action／AI 回應重播。
-   - 補上暗牌隔離、暫停／重連、進行中 action 與伺服器重啟後恢復的整合測試。
+   - **已完成：**採用版本化、欄位白名單的 session snapshot；牌山剩餘順序、手牌、牌河、引擎回覆、牌譜與 pending action 都可驗證地保存。
+   - **已完成：**還原時重新建立 `Shan`／`He`／`Shoupai`，再用牌譜事件重建 AI 的可見資訊與牌效推算狀態；不把 callback、timer 或 queue 寫進 PostgreSQL。
+   - **已完成：**PostgreSQL 新增 `riichi_json` 與四席 migration；重啟後先暫停，真人以原 token reconnect 後再繼續。
+   - **已完成：**補上暗牌隔離、pending action、暫停／重連、snapshot round-trip 與 PostgreSQL server restart integration test。
+   - 持久化時機限定在引擎事件邊界；瞬間的 callback／queue 不屬於可恢復資料。
 
 5. **多實例時加入 Redis**
+   - **目前暫緩。**單一 Node instance 以 PostgreSQL 作為持久化真實來源已足夠。
    - 僅在需要多個 Node server 時導入 Redis。
    - 用於跨實例 presence、房間變更通知與短期快取；PostgreSQL 仍是房間狀態與持久化真實來源。
    - 再依部署規模補上 sticky session、故障轉移、監控與資料庫備份策略。
 
 WebSocket rate limit 與 abuse protection 已在伺服器層先行存在；後續仍可依公開服務流量補強觀測、封鎖與管理工具。
 
-### P1：提升 AI 品質
+### P1：提升 AI 品質（目前暫緩）
+
+P1-3 先不動現有 AI 行為，避免在日麻持久化剛穩定時同時改變對局結果與效能基線。日後應以可重現對局、時間預算與棋力指標作為獨立工作項目。
 
 共用 AI 搜尋可以加入：
 
@@ -622,6 +628,22 @@ WebSocket rate limit 與 abuse protection 已在伺服器層先行存在；後�
 
 應避免販售直接影響勝率的能力，維持線上對戰公平性。
 
+#### 5.13 P2～P3 評估結論
+
+目前不建議直接進入帳號、排位或多實例部署；先把「一局棋如何被保存、重播、分享與分析」定義穩定，才能避免之後為每個棋種重做資料格式。
+
+建議順序如下：
+
+1. **P2-1 回放核心與版本化 replay schema**：一般棋類沿用歷史／state transition，日麻以牌譜與真人 action 為核心，並對暗牌做座位權限過濾。
+2. **P2-2 棋譜匯出與分享**：西洋棋輸出 PGN、圍棋輸出 SGF，其餘棋種使用帶 `schemaVersion` 的 JSON；分享連結只讀取公開資訊。
+3. **P2-3 每日挑戰與題庫**：等 replay schema 穩定後，把局面、唯一解、難度與解題紀錄抽成可重用題庫。
+4. **P2-4 AI 人格、教學與賽後分析**：先做解釋與替代走法，再把不同搜尋預算與評估權重包裝成人格。
+5. **P3-1 帳號、戰績與配對**：需要 user／match／rating schema、驗證、封鎖與反作弊邊界。
+6. **P3-2 觀戰、比賽與對局時鐘**：需要觀戰者權限、事件廣播、斷線重連與審計紀錄。
+7. **P3-3 多實例與商業化**：流量證明需要後才導入 Redis；主題、進階分析與賽季等付費功能最後再做。
+
+P2 的共同前置是 replay schema、事件版本、暗牌／分享隱私規則與最小產品分析指標；P3 的共同前置是身份系統、對局生命週期、權限審計、限流與錯誤追蹤。
+
 ---
 
 ## 6. 建議實作順序
@@ -633,15 +655,15 @@ WebSocket rate limit 與 abuse protection 已在伺服器層先行存在；後�
 3. 加入 deterministic AI seed（P0 已完成）
 4. 增加 CI、格式檢查與 E2E 測試（CI／格式／瀏覽器 E2E／規則契約／property-based／reachable random positions 已完成）
 5. 拆分 `src/server/server.ts`（P0 已完成）
-6. 接入 PostgreSQL `RoomStore`、一般棋類重啟恢復、token hash、TTL 與 restart integration test（P0 已完成；CI 已執行真實 DB 測試）
+6. 接入 PostgreSQL `RoomStore`、一般棋類與日麻重啟恢復、token hash、TTL 與 restart integration test（P0 已完成；P1-1 已完成；CI 已執行真實 DB 測試）
 
 ### 第二階段：核心可玩性
 
-1. 對局回放
-2. 棋譜匯出與分享
-3. 每日謎題
-4. AI 人格
-5. 賽後分析與教學提示
+1. 對局回放與版本化 replay schema（P2-1）
+2. 棋譜匯出與分享（P2-2）
+3. 每日謎題（P2-3）
+4. AI 人格（P2-4）
+5. 賽後分析與教學提示（P2-4）
 
 ### 第三階段：棋力升級
 
@@ -653,11 +675,11 @@ WebSocket rate limit 與 abuse protection 已在伺服器層先行存在；後�
 
 ### 第四階段：正式產品
 
-1. 帳號與登入
-2. 對局持久化
-3. 公開配對與評分
-4. 觀戰與比賽
-5. 監控、日誌、限流與多實例部署
+1. 帳號與登入、對局歷史（P3-1）
+2. 公開配對與評分（P3-1）
+3. 觀戰、比賽與對局時鐘（P3-2）
+4. 監控、日誌、限流與錯誤追蹤（P3-1～P3-2 的共同基礎）
+5. 多實例部署與 Redis（P3-3，需求出現後再做）
 
 ---
 
