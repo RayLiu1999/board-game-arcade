@@ -94,7 +94,8 @@ public/engine.js         由 src/shared/engine.ts 產生的瀏覽器 bundle
 public/shogi.js          由 src/shared/shogi.ts 產生的瀏覽器 bundle
 lib/riichi-session.js    日麻權威對局、合法選項與各座位私密視圖
 lib/riichi-session.d.ts  日麻 JS 核心的 typed facade
-public/riichi-ui.js      日麻牌桌、手牌、交接遮罩及結算
+src/client/riichi-ui.ts  日麻 UI renderer 原始碼
+public/riichi-ui.js      由 src/client/riichi-ui.ts 產生的 UI bundle
 src/riichi-worker.ts     本機日麻 Worker 來源
 public/riichi-worker.js  已打包的日麻 Worker
 scripts/build.ts         建置 shared bundle、日麻 Worker 與第三方授權

@@ -124,7 +124,7 @@ majiang-core 推進牌局事件
 - `shogi.js`：由 `src/shared/shogi.ts` 建置出的將棋 bundle
 - `ai.js`：一般棋類 AI 決策
 - `ai-worker.js`：一般棋類 AI 的背景執行介面
-- `riichi-ui.js`：日麻專用 UI 渲染
+- `riichi-ui.js`：由 `src/client/riichi-ui.ts` 建置出的日麻 UI 渲染 bundle
 - `riichi-worker.js`：由 `src/riichi-worker.ts` 打包產生的瀏覽器成品
 - `vendor/`：瀏覽器端第三方檔案與授權檔
 
