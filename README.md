@@ -69,7 +69,7 @@ PORT=8080 npm start
 - 本機日麻由專用 Web Worker 執行，不提供悔棋或重新整理續局。離開本機牌桌前會提醒。
 - 同機遮罩防止一般交接時看到他人的手牌，並非同一裝置上的防作弊安全機制。
 
-日麻 Worker 已打包在 `public/riichi-worker.js`。修改 `lib/riichi-session.js`、`src/riichi-worker.js`、`src/shared/` 或更新套件後執行 `npm run build`。不需 CDN。
+日麻 Worker 已打包在 `public/riichi-worker.js`。修改 `lib/riichi-session.js`、`src/riichi-worker.ts`、`src/shared/` 或更新套件後執行 `npm run build`。不需 CDN。
 
 ## 測試
 
@@ -95,7 +95,7 @@ public/shogi.js          由 src/shared/shogi.ts 產生的瀏覽器 bundle
 lib/riichi-session.js    日麻權威對局、合法選項與各座位私密視圖
 lib/riichi-session.d.ts  日麻 JS 核心的 typed facade
 public/riichi-ui.js      日麻牌桌、手牌、交接遮罩及結算
-src/riichi-worker.js     本機日麻 Worker 來源
+src/riichi-worker.ts     本機日麻 Worker 來源
 public/riichi-worker.js  已打包的日麻 Worker
 scripts/build.ts         建置 shared bundle、日麻 Worker 與第三方授權
 public/ai.js             各棋種 AI 策略

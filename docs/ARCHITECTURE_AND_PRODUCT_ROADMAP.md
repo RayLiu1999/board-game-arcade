@@ -21,7 +21,7 @@ src/
 ├─ client/       app、AI、UI 與瀏覽器 Worker 原始碼
 ├─ server/       HTTP、WebSocket、房間服務
 ├─ shared/       一般棋類規則、狀態與通訊型別
-└─ riichi/       日麻 session 與 Worker 原始碼
+└─ riichi/       日麻 session 原始碼（逐步遷移中）
 
 scripts/         TypeScript 建置與開發工具
 test/            TypeScript 規則、整合與 E2E 測試
@@ -61,7 +61,7 @@ TypeScript 品質門檻：
 ├─ app.js                       前端流程與狀態管理
 ├─ engine.js / shogi.js         一般棋類規則
 ├─ ai-worker.js → ai.js         一般棋類 AI
-└─ riichi-worker.js             本機日麻執行環境
+└─ riichi-worker.js             由 src/riichi-worker.ts 打包的本機日麻執行環境
           │
           │ WebSocket
           ▼
@@ -125,7 +125,7 @@ majiang-core 推進牌局事件
 - `ai.js`：一般棋類 AI 決策
 - `ai-worker.js`：一般棋類 AI 的背景執行介面
 - `riichi-ui.js`：日麻專用 UI 渲染
-- `riichi-worker.js`：由 `src/riichi-worker.js` 打包產生的瀏覽器成品
+- `riichi-worker.js`：由 `src/riichi-worker.ts` 打包產生的瀏覽器成品
 - `vendor/`：瀏覽器端第三方檔案與授權檔
 
 `public/` 是瀏覽器可直接載入的成品。伺服器不再反向載入 `public/`，而是直接使用 `src/shared/`；因此 `public/` 的 bundle 可以被清除後重新產生，不是規則原始碼的唯一來源。
@@ -135,18 +135,18 @@ majiang-core 推進牌局事件
 `lib/riichi-session.js` 包裝日麻核心引擎，會被：
 
 - Node.js 線上伺服器使用
-- `src/riichi-worker.js` 引用並打包到瀏覽器 Worker
+- `src/riichi-worker.ts` 引用並打包到瀏覽器 Worker
 
 因此它不是純粹的 server-only 程式，而是共享的日麻 session 核心。
 
 ### `src/`：需要建置或由 `tsx` 執行的來源碼
 
-`src/shared/` 放置前後端共用的狀態、訊息型別與棋規；`src/server/server.ts` 是 HTTP／WebSocket 伺服器來源。`src/riichi-worker.js` 是本機日麻 Worker 的來源檔，仍使用 npm 套件，必須先由 esbuild 打包才能在瀏覽器執行。
+`src/shared/` 放置前後端共用的狀態、訊息型別與棋規；`src/server/server.ts` 是 HTTP／WebSocket 伺服器來源。`src/riichi-worker.ts` 是本機日麻 Worker 的來源檔，仍使用 npm 套件，必須先由 esbuild 打包才能在瀏覽器執行。
 
 ```text
 src/shared/engine.ts ─┐
 src/shared/shogi.ts  ├─ npm run build
-src/riichi-worker.js ┘
+src/riichi-worker.ts ┘
         ↓ npm run build
 public/engine.js / public/shogi.js / public/riichi-worker.js
 ```

@@ -15,6 +15,7 @@ export interface RiichiResult {
 
 export class RiichiSession {
   constructor(options?: RiichiSessionOptions);
+  readonly pending: ReadonlyMap<number, unknown>;
   readonly revision: number;
   readonly done: boolean;
   readonly result: RiichiResult | null;

@@ -12,7 +12,12 @@ interface WorkerScope {
   postMessage(message: unknown): void;
 }
 
-const scope = globalThis as unknown as WorkerScope;
+interface GlobalScope extends WorkerScope {
+  self?: WorkerScope;
+}
+
+const globalScope = globalThis as unknown as GlobalScope;
+const scope = globalScope.self ?? globalScope;
 
 scope.onmessage = (event: MessageEvent): void => {
   const data = event.data as AiRequest;
