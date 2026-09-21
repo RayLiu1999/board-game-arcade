@@ -177,7 +177,7 @@ export function createServer() {
         room.state = {
           game: "riichi",
           winner: room.session.done
-            ? (room.session.result?.rank.indexOf(1) ?? -1) + 1
+            ? (room.session.result?.rank?.indexOf(1) ?? -1) + 1
             : null,
           ply: room.session.revision,
         };

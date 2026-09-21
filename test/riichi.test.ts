@@ -178,6 +178,8 @@ register(
     assert(results >= 4);
     const result = s.view(0).result;
     assert.ok(result);
+    assert.ok(result.rank);
+    assert.ok(result.scores);
     assert.equal(result.rank.length, 4);
     assert.equal(result.log, undefined);
     assert.equal(
@@ -214,7 +216,9 @@ register(
   () => {
     const s = started();
     s.game._diyizimo = false;
-    s.game.model.shan._baopai.splice(0, s.game.model.shan._baopai.length, "z7");
+    const shan = s.game.model.shan;
+    assert.ok(shan);
+    shan._baopai.splice(0, shan._baopai.length, "z7");
     hand(s, "m2244p3355s6677z11");
     s.game.hule();
     const result = s.view(0).result;

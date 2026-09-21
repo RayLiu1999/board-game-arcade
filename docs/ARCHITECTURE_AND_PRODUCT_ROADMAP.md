@@ -133,7 +133,7 @@ majiang-core 推進牌局事件
 
 ### `lib/`：可被多個執行環境使用的核心模組
 
-`lib/riichi-session.js` 包裝日麻核心引擎，會被：
+`lib/riichi-session.ts` 包裝日麻核心引擎，會被：
 
 - Node.js 線上伺服器使用
 - `src/riichi-worker.ts` 引用並打包到瀏覽器 Worker
