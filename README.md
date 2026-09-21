@@ -19,6 +19,14 @@ PORT=8080 npm start
 
 `npm run dev` 會在伺服器檔案變更時重新啟動。前端為原生 ES modules，伺服器與共用棋規以 TypeScript 維護，啟動與測試由 `tsx` 執行。日麻 Worker 與共用棋規 bundle 可由 `npm run build` 產生；安裝依賴後，執行時不載入 CDN 或外部服務。
 
+正式啟動時若設定 `DATABASE_URL`，線上房間會使用 PostgreSQL 保存一般棋類房間；未設定時使用 memory store，適合本機開發。可用 `QIJU_ROOM_STORE=memory` 強制使用 memory store：
+
+```sh
+DATABASE_URL='postgresql://user:password@host:5432/qiju' npm start
+```
+
+PostgreSQL migration 會在伺服器啟動時自動初始化。日麻的 live session 尚未持久化，伺服器重啟後仍需重新建立日麻房間。
+
 ## 棋種與規則
 
 | 棋種     | 實作                                                                                                     |
@@ -54,7 +62,7 @@ PORT=8080 npm start
 
 將整個 Node.js 專案部署到支援長連線 WebSocket 的主機，以 HTTPS 網址存取，反向代理需轉送 WebSocket Upgrade。無法只上傳 `public/` 到純靜態主機就獲得連線對戰。
 
-房間目前存在單一 Node 程序記憶體，伺服器重啟即清除，不支援跨多個實例同步。所有真人皆離線後 30 分鐘清理。相同分頁重新整理或暫時斷線，會用 sessionStorage 的座位 token 重連；不要分享 token。主動按「返回大廳」離開會清除該分頁的重連資訊，已佔用的席位仍保留，需重新建立房間才能換人。
+有設定 `DATABASE_URL` 時，一般棋類房間會保存於 PostgreSQL，伺服器重啟後可以用原本的 room code 與座位 token 恢復；日麻 live session 暫不持久化，仍會在伺服器重啟後清除。所有真人皆離線後 30 分鐘清理。相同分頁重新整理或暫時斷線，會用 sessionStorage 的座位 token 重連；伺服器資料庫只保存 token hash，不要分享 token。主動按「返回大廳」離開會清除該分頁的重連資訊，已佔用的席位仍保留，需重新建立房間才能換人。
 
 尚未包含帳號、排行榜、公開配對、觀戰或對局時鐘。七種棋為兩人棋；日麻為四人桌，可混合真人與 AI。
 
@@ -65,7 +73,7 @@ PORT=8080 npm start
 - 計分與順位由規則引擎處理。開啟赤寶牌、食斷、一發、裏寶牌、槓寶牌、雙響、三家和流局、途中流局、流局聽牌罰符、聽牌連莊與飛人；不延長至下一場。單局練習在一次和牌或流局結算後結束；東風／半莊依莊家連莊與終局規則進行。
 - 線上四人房滿員自動開局，或由第一位房主按「以 AI 補齊並開局」。開局後不能替換 AI 座位。所有真人同意才會再戰。
 - 伺服器保存完整牌山，各瀏覽器只收到自己的暗牌、各家公開副露／牌河／分數、合法選項與依法公開的和牌／聽牌結果；不傳送其他人的暗牌或牌山。
-- 任一真人斷線會暫停整桌，原分頁用座位 token 重連後恢復。房間仍不持久化，伺服器重啟會清除。
+- 任一真人斷線會暫停整桌，原分頁用座位 token 重連後恢復。日麻 session 尚未持久化，伺服器重啟會清除進行中的日麻對局。
 - 本機日麻由專用 Web Worker 執行，不提供悔棋或重新整理續局。離開本機牌桌前會提醒。
 - 同機遮罩防止一般交接時看到他人的手牌，並非同一裝置上的防作弊安全機制。
 
@@ -76,9 +84,10 @@ PORT=8080 npm start
 ```sh
 npm test
 npm run test:e2e
+npm run test:postgres # 需設定 QIJU_TEST_DATABASE_URL
 ```
 
-`npm test` 使用 Node 內建測試執行器，涵蓋棋規（含將棋打入／升變／打步詰）、七種棋的規則契約、可重現走訪、fast-check 合法路徑與 reachable random positions 測試、協定訊息邊界、日麻合法選項／無役與振聽／符番／結算／暗牌隔離、AI 合法走法、WebSocket 兩端同步、非法／過期落子、滿房、斷線重連、認輸、再戰與 HTTP 檔案邊界。`npm run test:e2e` 會先建置瀏覽器 bundle，再用 Playwright 驗證建立房間、加入房間與落子同步。整合測試會在本機開啟隨機連接埠；E2E 會啟動固定的 4173 連接埠。
+`npm test` 使用 Node 內建測試執行器，涵蓋棋規（含將棋打入／升變／打步詰）、七種棋的規則契約、可重現走訪、fast-check 合法路徑與 reachable random positions 測試、協定訊息邊界、日麻合法選項／無役與振聽／符番／結算／暗牌隔離、AI 合法走法、WebSocket 兩端同步、非法／過期落子、滿房、斷線重連、認輸、再戰與 HTTP 檔案邊界，也包含 PostgreSQL adapter 與重啟恢復測試（未設定專用 DB 時各 1 項 skip）。`npm run test:postgres` 會執行兩項需要真實 PostgreSQL 的測試，請使用獨立測試資料庫設定 `QIJU_TEST_DATABASE_URL`。`npm run test:e2e` 會先建置瀏覽器 bundle，再用 Playwright 驗證建立房間、加入房間與落子同步。整合測試會在本機開啟隨機連接埠；E2E 會啟動固定的 4173 連接埠。
 
 ## 程式結構
 
@@ -89,6 +98,10 @@ src/server/websocket-server.ts WebSocket 連線生命週期與錯誤邊界
 src/server/room-manager.ts 房間建立、廣播、日麻啟動與清理
 src/server/game-protocol.ts client command 的權威分派
 src/server/room-types.ts 房間、socket 與玩家 domain type
+src/server/room-store.ts 持久化 snapshot contract 與 memory store
+src/server/postgres-room-store.ts PostgreSQL migration、查詢與 revision CAS
+src/server/room-store-factory.ts 依環境選擇 PostgreSQL 或 memory store
+src/server/migrations/001-room-store.sql 房間與玩家資料表 migration
 src/shared/engine.ts     一般棋類共用規則與狀態轉移
 src/shared/shogi.ts      將棋規則與持駒
 src/shared/protocol.ts   WebSocket 訊息型別與 runtime parser

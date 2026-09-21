@@ -7,7 +7,7 @@
 目前基準版本：
 
 - Git commit：`91630b1 Initial commit: Qiju board game arcade`
-- 測試：`npm test` 通過 55 個測試；`npm run test:e2e` 通過 1 個瀏覽器流程
+- 測試：`npm test` 通過 55 個測試，另有 2 個需要專用 PostgreSQL 的 optional tests；`npm run test:e2e` 通過 1 個瀏覽器流程
 - 執行環境：Node.js 22 或更新版本
 
 ### TS-first 決策
@@ -474,9 +474,9 @@ src/server/
 
 #### 5.5 線上資料持久化
 
-目前房間存在單一 Node 程序記憶體中。P0 採用線上 PostgreSQL 作為主要持久化來源，先解決單一 Node 程序重啟後一般棋類房間消失的問題；Redis 不列入目前單實例部署的必要依賴。
+P0 程式碼已落地：有設定 `DATABASE_URL` 時使用線上 PostgreSQL 作為主要持久化來源，先解決單一 Node 程序重啟後一般棋類房間消失的問題；沒有設定時保留 memory store 供本機開發與一般測試使用。Redis 不列入目前單實例部署的必要依賴。
 
-##### P0 範圍：完成第 1～3 項
+##### P0 範圍：第 1～3 項已實作
 
 1. **PostgreSQL schema 與 `RoomStore` abstraction**
    - 以 `RoomStore` 隔離房間服務與資料庫實作。
@@ -493,9 +493,9 @@ src/server/
    - 保存 `expires_at`，於啟動及定期清理過期、且無活躍連線的房間。
    - 使用與正式環境相同的 PostgreSQL 引擎驗證建立、落子、重啟恢復、過期清理與錯誤並發案例。
 
-P0 完成條件是：一般棋類房間在 Node 程序重啟後仍能恢復並繼續遊玩，敏感 token 不以明文存於資料庫，且資料庫整合測試能在 CI 或指定測試環境重現核心流程。
+P0 的程式碼完成條件已具備：一般棋類房間在 Node 程序重啟後可恢復並繼續遊玩，敏感 token 不以明文存於資料庫，且有 PostgreSQL adapter 與完整 server restart integration test。部署前仍需在專用測試資料庫設定 `QIJU_TEST_DATABASE_URL`，執行兩項目前預設 skip 的真實 PostgreSQL 測試。
 
-##### P1 範圍：完成第 4～5 項
+##### P1 計畫：第 4～5 項
 
 4. **日麻 `snapshot()`／`restore()` 或 event replay**
    - 不直接序列化 `Majiang.Game`、timer、queue 或 callback。
@@ -628,6 +628,7 @@ WebSocket rate limit 與 abuse protection 已在伺服器層先行存在；後�
 3. 加入 deterministic AI seed（P0 已完成）
 4. 增加 CI、格式檢查與 E2E 測試（CI／格式／瀏覽器 E2E／規則契約／property-based／reachable random positions 已完成）
 5. 拆分 `src/server/server.ts`（P0 已完成）
+6. 接入 PostgreSQL `RoomStore`、一般棋類重啟恢復、token hash、TTL 與 restart integration test（P0 已完成；真實 DB 測試需設定 `QIJU_TEST_DATABASE_URL`）
 
 ### 第二階段：核心可玩性
 
