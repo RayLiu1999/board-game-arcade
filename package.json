@@ -7,6 +7,7 @@
     "start": "tsx src/server/server.ts",
     "dev": "tsx watch src/server/server.ts",
     "test": "tsx --test test/*.ts",
+    "test:postgres": "tsx --test test/postgres-room-store.test.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint \"**/*.ts\" --max-warnings 0",
     "format": "prettier --write lib/*.ts src/**/*.ts scripts/*.ts test/**/*.ts playwright.config.ts public/index.html public/style.css docs/*.md README.md package.json tsconfig.json eslint.config.mjs",
