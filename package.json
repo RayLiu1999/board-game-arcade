@@ -18,12 +18,14 @@
     "@kobalab/majiang-ai": "1.2.0",
     "@kobalab/majiang-core": "1.4.1",
     "chess.js": "^1.4.0",
+    "pg": "^8.23.0",
     "ws": "^8.18.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.63.0",
     "@types/node": "^26.6.2",
+    "@types/pg": "^8.23.1",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.28.2",
     "eslint": "^10.11.0",
