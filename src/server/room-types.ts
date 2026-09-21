@@ -23,7 +23,7 @@ export type RoomState = GameState | RiichiSummary;
 
 export interface RoomPlayer {
   name: string;
-  token: string;
+  tokenHash: string;
   socket?: ClientSocket | null;
   bot?: boolean;
 }
@@ -35,5 +35,7 @@ export interface Room {
   rounds: number;
   rematch: number[];
   touched: number;
+  expiresAt: number;
+  revision: number;
   session: RiichiSession | null;
 }

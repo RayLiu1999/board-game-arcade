@@ -12,8 +12,25 @@ import {
   type RoomState,
   type SocketSide,
 } from "./room-types.js";
+import {
+  createRoomToken,
+  hashRoomToken,
+  matchesRoomToken,
+} from "./room-security.js";
+import {
+  MemoryRoomStore,
+  ROOM_TTL_MS,
+  type RoomSnapshot,
+  type RoomStore,
+} from "./room-store.js";
 
 export type SendMessage = (socket: ClientSocket, data: unknown) => void;
+
+export interface RoomManagerOptions {
+  sendMessage?: SendMessage;
+  store?: RoomStore;
+  now?: () => number;
+}
 
 export const send: SendMessage = (socket, data) => {
   if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(data));
@@ -31,8 +48,63 @@ const normalizeName = (value: string | undefined, index: number): string =>
 
 export class RoomManager {
   readonly rooms = new Map<string, Room>();
+  readonly ready: Promise<void>;
 
-  constructor(private readonly sendMessage: SendMessage = send) {}
+  private readonly sendMessage: SendMessage;
+  private readonly store: RoomStore;
+  private readonly now: () => number;
+
+  constructor(options: RoomManagerOptions = {}) {
+    this.sendMessage = options.sendMessage ?? send;
+    this.store = options.store ?? new MemoryRoomStore();
+    this.now = options.now ?? Date.now;
+    this.ready = this.restore();
+  }
+
+  private async restore(): Promise<void> {
+    await this.store.initialize();
+    const snapshots = await this.store.load(this.now());
+    for (const snapshot of snapshots)
+      this.rooms.set(snapshot.code, restore(snapshot));
+  }
+
+  private snapshot(room: Room): RoomSnapshot | null {
+    if (room.state.game === "riichi") return null;
+    return {
+      code: room.code,
+      state: structuredClone(room.state),
+      players: room.players.map((player) =>
+        player
+          ? {
+              name: player.name,
+              tokenHash: player.tokenHash,
+              bot: Boolean(player.bot),
+            }
+          : null,
+      ),
+      rounds: room.rounds,
+      rematch: [...room.rematch],
+      revision: room.revision,
+      touched: room.touched,
+      expiresAt: room.expiresAt,
+    };
+  }
+
+  touch(room: Room): void {
+    room.touched = this.now();
+    room.expiresAt = room.touched + ROOM_TTL_MS;
+  }
+
+  async persist(room: Room): Promise<void> {
+    const snapshot = this.snapshot(room);
+    if (!snapshot) return;
+    room.revision = await this.store.update(snapshot, room.revision);
+  }
+
+  private async createPersistentRoom(room: Room): Promise<void> {
+    const snapshot = this.snapshot(room);
+    if (snapshot) await this.store.create(snapshot);
+  }
 
   broadcast(room: Room): void {
     room.players.forEach((player, index) => {
@@ -97,7 +169,7 @@ export class RoomManager {
     room.session.start();
   }
 
-  detach(socket: ClientSocket): void {
+  async detach(socket: ClientSocket): Promise<void> {
     if (!socket.room) return;
     const room = this.rooms.get(socket.room);
     if (!room) {
@@ -108,16 +180,18 @@ export class RoomManager {
     if (player) {
       player.socket = null;
       room.session?.pause(true);
-      room.touched = Date.now();
+      this.touch(room);
+      await this.persist(room);
       this.broadcast(room);
     }
     socket.room = null;
   }
 
-  handleEntry(
+  async handleEntry(
     socket: ClientSocket,
     message: Extract<ClientMessage, { type: "create" | "join" }>,
-  ): void {
+  ): Promise<void> {
+    await this.ready;
     if (socket.room) throw new Error("請先離開目前房間");
     let room: Room;
     let index: number;
@@ -140,9 +214,12 @@ export class RoomManager {
         ).fill(null),
         rounds,
         rematch: [],
-        touched: Date.now(),
+        touched: this.now(),
+        expiresAt: this.now() + ROOM_TTL_MS,
+        revision: 0,
         session: null,
       };
+      await this.createPersistentRoom(room);
       this.rooms.set(code, room);
       index = 0;
     } else {
@@ -150,7 +227,11 @@ export class RoomManager {
       if (!joinedRoom) throw new Error("找不到房間，請確認房間代碼");
       room = joinedRoom;
       index = room.players.findIndex((player) =>
-        Boolean(player?.token && player.token === message.token),
+        Boolean(
+          player?.tokenHash &&
+            message.token &&
+            matchesRoomToken(message.token, player.tokenHash),
+        ),
       );
       if (index < 0) index = room.players.findIndex((player) => !player);
       if (index < 0) throw new Error("房間已滿");
@@ -161,12 +242,21 @@ export class RoomManager {
       existing.socket.room = null;
       existing.socket.close(4001, "Session replaced");
     }
-    const token = existing?.token ?? randomBytes(24).toString("hex");
+    const token =
+      message.type === "join" && message.token
+        ? message.token
+        : createRoomToken();
     const name = existing?.name ?? normalizeName(message.name, index);
-    room.players[index] = { name, token, socket };
+    room.players[index] = {
+      name,
+      tokenHash: existing?.tokenHash ?? hashRoomToken(token),
+      socket,
+      ...(existing?.bot ? { bot: true } : {}),
+    };
     socket.room = room.code;
     socket.side = roomSide(room.state, index);
-    room.touched = Date.now();
+    this.touch(room);
+    await this.persist(room);
     this.sendMessage(socket, {
       type: "joined",
       code: room.code,
@@ -180,19 +270,42 @@ export class RoomManager {
     this.broadcast(room);
   }
 
-  pruneInactive(now = Date.now()): void {
+  async pruneInactive(now = this.now()): Promise<void> {
     for (const [code, room] of this.rooms) {
       if (
         !room.players.some((player) => Boolean(player?.socket)) &&
-        now - room.touched > 30 * 60 * 1000
+        now >= room.expiresAt
       ) {
         room.session?.close();
         this.rooms.delete(code);
+        await this.store.delete(code);
       }
     }
   }
 
-  closeAll(): void {
+  async closeAll(): Promise<void> {
     for (const room of this.rooms.values()) room.session?.close();
+    await this.store.close();
   }
 }
+
+const restore = (snapshot: RoomSnapshot): Room => ({
+  code: snapshot.code,
+  state: structuredClone(snapshot.state),
+  players: snapshot.players.map((player) =>
+    player
+      ? {
+          name: player.name,
+          tokenHash: player.tokenHash,
+          bot: player.bot,
+          socket: null,
+        }
+      : null,
+  ),
+  rounds: snapshot.rounds,
+  rematch: [...snapshot.rematch],
+  touched: snapshot.touched,
+  expiresAt: snapshot.expiresAt,
+  revision: snapshot.revision,
+  session: null,
+});

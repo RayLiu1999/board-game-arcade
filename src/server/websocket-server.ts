@@ -42,7 +42,14 @@ export const attachWebSocketServer = (
         count++;
         if (count > 40) throw new Error("操作過於頻繁");
         const message = parseClientMessage(JSON.parse(rawText(raw)) as unknown);
-        handleClientMessage(socket, message, roomManager);
+        void roomManager.ready
+          .then(() => handleClientMessage(socket, message, roomManager))
+          .catch((error: unknown) => {
+            send(socket, {
+              type: "error",
+              message: error instanceof Error ? error.message : "伺服器錯誤",
+            });
+          });
       } catch (error: unknown) {
         send(socket, {
           type: "error",
@@ -51,7 +58,7 @@ export const attachWebSocketServer = (
       }
     });
     socket.on("close", () => {
-      roomManager.detach(socket);
+      void roomManager.detach(socket);
     });
     socket.on("error", () => {});
   });
@@ -66,12 +73,12 @@ export const attachWebSocketServer = (
       socket.alive = false;
       socket.ping();
     }
-    roomManager.pruneInactive();
+    void roomManager.pruneInactive();
   }, 30000);
   timer.unref();
   server.on("close", () => {
     clearInterval(timer);
-    roomManager.closeAll();
+    void roomManager.closeAll();
     wss.close();
   });
   return wss;

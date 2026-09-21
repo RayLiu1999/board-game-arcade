@@ -1,10 +1,9 @@
-import { randomBytes } from "node:crypto";
-
 import { applyMove, createGame, scoringAction } from "../shared/engine.js";
 import type { ClientMessage, PlayerSide } from "../shared/protocol.js";
 import type { ClientSocket, SocketSide } from "./room-types.js";
 import { send } from "./room-manager.js";
 import type { RoomManager } from "./room-manager.js";
+import { createRoomToken, hashRoomToken } from "./room-security.js";
 
 const boardSide = (side: SocketSide): PlayerSide => {
   if (side === 1 || side === -1) return side;
@@ -16,18 +15,18 @@ const seatIndex = (side: SocketSide): number => {
   return side - 1;
 };
 
-export function handleClientMessage(
+export async function handleClientMessage(
   socket: ClientSocket,
   message: ClientMessage,
   roomManager: RoomManager,
-): void {
+): Promise<void> {
   const { rooms } = roomManager;
   if (message.type === "create" || message.type === "join") {
-    roomManager.handleEntry(socket, message);
+    await roomManager.handleEntry(socket, message);
     return;
   }
   if (message.type === "leave") {
-    roomManager.detach(socket);
+    await roomManager.detach(socket);
     send(socket, { type: "left" });
     return;
   }
@@ -45,7 +44,7 @@ export function handleClientMessage(
       (player, index) =>
         player ?? {
           name: `AI 玩家 ${String(index + 1)}`,
-          token: randomBytes(24).toString("hex"),
+          tokenHash: hashRoomToken(createRoomToken()),
           bot: true,
         },
     );
@@ -108,6 +107,7 @@ export function handleClientMessage(
       }
     }
   }
-  room.touched = Date.now();
+  roomManager.touch(room);
+  await roomManager.persist(room);
   roomManager.broadcast(room);
 }
