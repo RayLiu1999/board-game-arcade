@@ -17,41 +17,14 @@ import {
   type ClientMessage,
   type PlayerSide,
 } from "../shared/protocol.js";
-import type { GameState } from "../shared/game-types.js";
-
-type RiichiSide = 1 | 2 | 3 | 4;
-type SocketSide = PlayerSide | RiichiSide;
-
-interface ClientSocket extends WebSocket {
-  alive: boolean;
-  room: string | null;
-  side: SocketSide;
-}
-
-interface RiichiSummary {
-  game: "riichi";
-  winner: number | null;
-  ply: number;
-}
-
-type RoomState = GameState | RiichiSummary;
-
-interface RoomPlayer {
-  name: string;
-  token: string;
-  socket?: ClientSocket | null;
-  bot?: boolean;
-}
-
-interface Room {
-  code: string;
-  state: RoomState;
-  players: Array<RoomPlayer | null>;
-  rounds: number;
-  rematch: number[];
-  touched: number;
-  session: RiichiSession | null;
-}
+import type {
+  ClientSocket,
+  RiichiSide,
+  Room,
+  RoomPlayer,
+  RoomState,
+  SocketSide,
+} from "./room-types.js";
 
 const root = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
