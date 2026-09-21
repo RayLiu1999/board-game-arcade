@@ -1,11 +1,4 @@
 import { randomBytes } from "node:crypto";
-import {
-  createServer as createHttpServer,
-  type IncomingMessage,
-  type ServerResponse,
-} from "node:http";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { WebSocket, WebSocketServer, type RawData } from "ws";
@@ -25,18 +18,7 @@ import type {
   RoomState,
   SocketSide,
 } from "./room-types.js";
-
-const root = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../public",
-);
-const mime: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".svg": "image/svg+xml",
-  ".json": "application/json",
-};
+import { createStaticHttpServer, parsePort } from "./http-server.js";
 
 const asClientSocket = (socket: WebSocket): ClientSocket =>
   socket as ClientSocket;
@@ -65,11 +47,6 @@ const seatIndex = (side: SocketSide): number => {
 const normalizeName = (value: string | undefined, index: number): string =>
   value?.trim().slice(0, 20) || `玩家 ${String(index + 1)}`;
 
-const parsePort = (value: string | undefined): number => {
-  const port = Number(value);
-  return Number.isInteger(port) && port >= 0 && port <= 65535 ? port : 3000;
-};
-
 const rawText = (raw: RawData): string => {
   if (Buffer.isBuffer(raw)) return raw.toString("utf8");
   if (Array.isArray(raw)) return Buffer.concat(raw).toString("utf8");
@@ -78,33 +55,7 @@ const rawText = (raw: RawData): string => {
 
 export function createServer() {
   const rooms = new Map<string, Room>();
-  const serveFile = async (
-    req: IncomingMessage,
-    res: ServerResponse,
-  ): Promise<void> => {
-    try {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const pathname = decodeURIComponent(url.pathname);
-      const file = path.resolve(
-        root,
-        "." + (pathname === "/" ? "/index.html" : pathname),
-      );
-      if (!file.startsWith(root + path.sep)) throw new Error("禁止存取");
-      const data = await readFile(file);
-      res.writeHead(200, {
-        "Content-Type": mime[path.extname(file)] ?? "application/octet-stream",
-        "X-Content-Type-Options": "nosniff",
-        "Cache-Control": "no-cache",
-      });
-      res.end(data);
-    } catch {
-      res.writeHead(404);
-      res.end("Not found");
-    }
-  };
-  const server = createHttpServer((req, res) => {
-    void serveFile(req, res);
-  });
+  const server = createStaticHttpServer();
 
   const wss = new WebSocketServer({ server, maxPayload: 8192 });
 
