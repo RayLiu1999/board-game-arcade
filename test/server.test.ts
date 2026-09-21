@@ -4,6 +4,7 @@ import { once } from "node:events";
 import { WebSocket, type RawData } from "ws";
 
 import { createServer } from "../src/server/server.js";
+import { PostgresRoomStore } from "../src/server/postgres-room-store.js";
 import type {
   GameState,
   NumericBoardState,
@@ -404,3 +405,94 @@ void test("shogi works through the existing authoritative room protocol", async 
   assert.equal(shogi.board[47], 1);
   assert.equal(shogi.turn, -1);
 });
+
+const postgresTestUrl = process.env.QIJU_TEST_DATABASE_URL;
+
+if (!postgresTestUrl) {
+  void test(
+    "postgres-backed board rooms recover after server restart",
+    { skip: "未設定 QIJU_TEST_DATABASE_URL" },
+    () => {},
+  );
+} else {
+  void test("postgres-backed board rooms recover after server restart", async (t) => {
+    const store1 = new PostgresRoomStore({
+      connectionString: postgresTestUrl,
+    });
+    const first = createServer({ roomStore: store1 });
+    let second: ReturnType<typeof createServer> | null = null;
+    let code: string | null = null;
+
+    const stop = async (
+      bundle: ReturnType<typeof createServer>,
+    ): Promise<void> => {
+      for (const ws of bundle.wss.clients) ws.terminate();
+      if (bundle.server.listening) await closeServer(bundle.server);
+    };
+
+    t.after(async () => {
+      await stop(first);
+      if (second) await stop(second);
+      if (code) {
+        const cleanup = new PostgresRoomStore({
+          connectionString: postgresTestUrl,
+        });
+        await cleanup.initialize();
+        await cleanup.delete(code);
+        await cleanup.close();
+      }
+    });
+
+    await first.ready;
+    first.server.listen(0, "127.0.0.1");
+    await once(first.server, "listening");
+    const firstUrl = `ws://127.0.0.1:${String(portOf(first.server))}`;
+    const host = await client(firstUrl);
+    const guest = await client(firstUrl);
+
+    host.send({ type: "create", game: "gomoku", name: "甲" });
+    const joined = await host.next("joined");
+    code = joined.code;
+    await host.next("state");
+    guest.send({ type: "join", code: joined.code, name: "乙" });
+    const guestJoined = await guest.next("joined");
+    await host.next("state");
+    await guest.next("state");
+    host.send({ type: "move", ply: 0, move: { to: 112 } });
+    const beforeRestart = await host.next("state");
+    await guest.next("state");
+    assert.equal(numericState(beforeRestart.state).board[112], 1);
+    await stop(first);
+
+    const store2 = new PostgresRoomStore({
+      connectionString: postgresTestUrl,
+    });
+    second = createServer({ roomStore: store2 });
+    await second.ready;
+    second.server.listen(0, "127.0.0.1");
+    await once(second.server, "listening");
+    const secondUrl = `ws://127.0.0.1:${String(portOf(second.server))}`;
+    const resumedHost = await client(secondUrl);
+    const resumedGuest = await client(secondUrl);
+    resumedHost.send({
+      type: "join",
+      code: joined.code,
+      token: joined.token,
+    });
+    assert.equal((await resumedHost.next("joined")).side, 1);
+    await resumedHost.next("state");
+    resumedGuest.send({
+      type: "join",
+      code: joined.code,
+      token: guestJoined.token,
+    });
+    assert.equal((await resumedGuest.next("joined")).side, -1);
+    const resumed = await resumedHost.next("state");
+    await resumedGuest.next("state");
+    const resumedState = numericState(resumed.state);
+    assert.equal(resumedState.ply, 1);
+    assert.equal(resumedState.board[112], 1);
+    assert.equal(item(resumed.players, 0)?.name, "甲");
+    assert.equal(item(resumed.players, 1)?.name, "乙");
+  });
+}
