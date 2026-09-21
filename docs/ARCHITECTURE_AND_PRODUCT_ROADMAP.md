@@ -7,7 +7,7 @@
 目前基準版本：
 
 - Git commit：`91630b1 Initial commit: Qiju board game arcade`
-- 測試：`npm test` 通過 46 個測試
+- 測試：`npm test` 通過 50 個測試
 - 執行環境：Node.js 22 或更新版本
 
 ### TS-first 決策
@@ -468,7 +468,7 @@ src/server/
 
 #### 5.4 強化測試品質
 
-目前已有規則與 WebSocket 整合測試，並已支援可注入的 deterministic AI seed；後續可增加：
+目前已有規則、協定邊界與 WebSocket 整合測試，並已支援可注入的 deterministic AI seed；後續可增加：
 
 - 每種棋的規則契約測試
 - property-based testing
@@ -605,7 +605,7 @@ src/server/
 1. 將共享棋規移到明確的 `shared/` 層
 2. 建立 state 與 WebSocket message schema
 3. 加入 deterministic AI seed（P0 已完成）
-4. 增加 CI、格式檢查與 E2E 測試（CI／格式已完成，E2E 待補）
+4. 增加 CI、格式檢查與 E2E 測試（CI／格式已完成，協定邊界已補，E2E 待補）
 5. 拆分 `src/server/server.ts`（P0 已完成）
 
 ### 第二階段：核心可玩性
