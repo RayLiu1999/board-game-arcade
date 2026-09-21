@@ -75,9 +75,10 @@ PORT=8080 npm start
 
 ```sh
 npm test
+npm run test:e2e
 ```
 
-Node 內建測試執行器：棋規（含將棋打入／升變／打步詰）、協定訊息邊界、日麻合法選項／無役與振聽／符番／結算／暗牌隔離、AI 合法走法、WebSocket 兩端同步、非法／過期落子、滿房、斷線重連、認輸、再戰與 HTTP 檔案邊界。整合測試會在本機開啟隨機連接埠。
+`npm test` 使用 Node 內建測試執行器，涵蓋棋規（含將棋打入／升變／打步詰）、協定訊息邊界、日麻合法選項／無役與振聽／符番／結算／暗牌隔離、AI 合法走法、WebSocket 兩端同步、非法／過期落子、滿房、斷線重連、認輸、再戰與 HTTP 檔案邊界。`npm run test:e2e` 會先建置瀏覽器 bundle，再用 Playwright 驗證建立房間、加入房間與落子同步。整合測試會在本機開啟隨機連接埠；E2E 會啟動固定的 4173 連接埠。
 
 ## 程式結構
 
@@ -112,6 +113,7 @@ public/ai-worker.js      由 src/client/ai-worker.ts 產生的 Worker bundle
 public/vendor/chess.js   鎖定的 chess.js 1.4.0 瀏覽器模組
 public/vendor/CHESS-LICENSE
 test/                   棋規與真實 WebSocket 整合測試
+test/e2e/room.spec.ts   Playwright 建立房間、加入房間與落子同步流程
 ```
 
 chess.js 的瀏覽器版本已附於專案內（BSD-2-Clause 授權亦附上）。更新 npm 中的 chess.js 時，請同步更新 `public/vendor/chess.js` 與授權，並執行測試。依賴與 API 參考：[chess.js](https://github.com/jhlywa/chess.js)、[ws](https://github.com/websockets/ws)。
