@@ -17,6 +17,14 @@ npm start
 PORT=8080 npm start
 ```
 
+專案會自動載入根目錄的 `.env`。第一次設定可參考 `.env.example`；請把實際的 PostgreSQL 連線字串填入 `.env`，不要提交該檔案。`DATABASE_URL` 用於正式啟動時保存一般棋類房間，`QIJU_TEST_DATABASE_URL` 用於 PostgreSQL 整合測試，應指向獨立的測試資料庫：
+
+```sh
+# .env
+DATABASE_URL='postgresql://user:password@host:5432/qiju'
+QIJU_TEST_DATABASE_URL='postgresql://user:password@host:5432/qiju_test'
+```
+
 `npm run dev` 會在伺服器檔案變更時重新啟動。前端為原生 ES modules，伺服器與共用棋規以 TypeScript 維護，啟動與測試由 `tsx` 執行。日麻 Worker 與共用棋規 bundle 可由 `npm run build` 產生；安裝依賴後，執行時不載入 CDN 或外部服務。
 
 正式啟動時若設定 `DATABASE_URL`，線上房間會使用 PostgreSQL 保存一般棋類房間；未設定時使用 memory store，適合本機開發。可用 `QIJU_ROOM_STORE=memory` 強制使用 memory store：
