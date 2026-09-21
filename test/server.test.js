@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { WebSocket } from "ws";
-import { createServer } from "../server.js";
+import { createServer } from "../src/server/server.ts";
 
 async function client(url) {
   const ws = new WebSocket(url),

@@ -68,6 +68,101 @@ export type ClientMessage =
   | RiichiActionMessage
   | RoomCommandMessage;
 
+const COMMAND_TYPES = [
+  "leave",
+  "riichi-start",
+  "resign",
+  "rematch",
+  "dead",
+  "accept",
+  "resume",
+] as const;
+
+type UnknownRecord = Record<string, unknown>;
+
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null;
+
+const isOptionalInteger = (value: unknown): value is number | undefined =>
+  value === undefined || (typeof value === "number" && Number.isInteger(value));
+
+const isOptionalString = (value: unknown): value is string | undefined =>
+  value === undefined || typeof value === "string";
+
+export function isBoardMove(value: unknown): value is BoardMove {
+  if (!isRecord(value)) return false;
+  return (
+    isOptionalInteger(value.from) &&
+    isOptionalInteger(value.to) &&
+    isOptionalInteger(value.capture) &&
+    isOptionalInteger(value.drop) &&
+    (value.pass === undefined || typeof value.pass === "boolean") &&
+    (value.promote === undefined || typeof value.promote === "boolean") &&
+    isOptionalString(value.promotion)
+  );
+}
+
+export function parseClientMessage(value: unknown): ClientMessage {
+  if (!isRecord(value) || typeof value.type !== "string")
+    throw new Error("無效訊息");
+
+  if (value.type === "create") {
+    if (!isGameId(value.game)) throw new Error("未知棋種");
+    if (!isOptionalInteger(value.size) || !isOptionalString(value.name))
+      throw new Error("建立房間訊息格式錯誤");
+    if (!isOptionalInteger(value.rounds)) throw new Error("日麻場數格式錯誤");
+    return {
+      type: "create",
+      game: value.game,
+      ...(value.size === undefined ? {} : { size: value.size }),
+      ...(value.name === undefined ? {} : { name: value.name }),
+      ...(value.rounds === undefined ? {} : { rounds: value.rounds }),
+    };
+  }
+
+  if (value.type === "join") {
+    if (
+      typeof value.code !== "string" ||
+      !isOptionalString(value.name) ||
+      !isOptionalString(value.token)
+    )
+      throw new Error("加入房間訊息格式錯誤");
+    return {
+      type: "join",
+      code: value.code,
+      ...(value.name === undefined ? {} : { name: value.name }),
+      ...(value.token === undefined ? {} : { token: value.token }),
+    };
+  }
+
+  if (value.type === "move") {
+    if (
+      !isOptionalInteger(value.ply) ||
+      value.ply === undefined ||
+      !isBoardMove(value.move)
+    )
+      throw new Error("落子訊息格式錯誤");
+    return { type: "move", ply: value.ply, move: value.move };
+  }
+
+  if (value.type === "riichi-action") {
+    if (typeof value.actionId !== "string") throw new Error("日麻操作格式錯誤");
+    return { type: "riichi-action", actionId: value.actionId };
+  }
+
+  if (
+    COMMAND_TYPES.includes(value.type as (typeof COMMAND_TYPES)[number]) &&
+    isOptionalInteger(value.to)
+  ) {
+    return {
+      type: value.type as RoomCommandMessage["type"],
+      ...(value.to === undefined ? {} : { to: value.to }),
+    };
+  }
+
+  throw new Error("未知操作");
+}
+
 export function isGameId(value: unknown): value is GameId {
   return typeof value === "string" && GAME_IDS.includes(value as GameId);
 }

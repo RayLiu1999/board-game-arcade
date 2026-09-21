@@ -17,7 +17,7 @@ npm start
 PORT=8080 npm start
 ```
 
-`npm run dev` 會在伺服器檔案變更時重新啟動。前端為原生 ES modules，日麻 Worker 已預先打包，首次執行不需建置；安裝依賴後，執行時不載入 CDN 或外部服務。
+`npm run dev` 會在伺服器檔案變更時重新啟動。前端為原生 ES modules，伺服器與共用棋規以 TypeScript 維護，啟動與測試由 `tsx` 執行。日麻 Worker 與共用棋規 bundle 可由 `npm run build` 產生；安裝依賴後，執行時不載入 CDN 或外部服務。
 
 ## 棋種與規則
 
@@ -69,7 +69,7 @@ PORT=8080 npm start
 - 本機日麻由專用 Web Worker 執行，不提供悔棋或重新整理續局。離開本機牌桌前會提醒。
 - 同機遮罩防止一般交接時看到他人的手牌，並非同一裝置上的防作弊安全機制。
 
-日麻 Worker 已打包在 `public/riichi-worker.js`。修改 `lib/riichi-session.js`、`src/riichi-worker.js` 或更新套件後執行 `npm run build`。不需 CDN。
+日麻 Worker 已打包在 `public/riichi-worker.js`。修改 `lib/riichi-session.js`、`src/riichi-worker.js`、`src/shared/` 或更新套件後執行 `npm run build`。不需 CDN。
 
 ## 測試
 
@@ -82,17 +82,22 @@ Node 內建測試執行器：棋規（含將棋打入／升變／打步詰）、
 ## 程式結構
 
 ```text
-server.js                HTTP 靜態檔案與權威 WebSocket 房間
+src/server/server.ts     HTTP 靜態檔案與權威 WebSocket 房間
+src/shared/engine.ts     一般棋類共用規則與狀態轉移
+src/shared/shogi.ts      將棋規則與持駒
+src/shared/protocol.ts   WebSocket 訊息型別與 runtime parser
+src/shared/game-types.ts 共用 state、move 與 scoring 型別
 public/index.html        大廳、設定及對局畫面
 public/style.css         桌機與手機排版
 public/app.js            棋盤互動、儲存、AI 與房間生命週期
-public/engine.js         遊戲目錄與七種棋的共用規則入口
-public/shogi.js          將棋規則與持駒
+public/engine.js         由 src/shared/engine.ts 產生的瀏覽器 bundle
+public/shogi.js          由 src/shared/shogi.ts 產生的瀏覽器 bundle
 lib/riichi-session.js    日麻權威對局、合法選項與各座位私密視圖
+lib/riichi-session.d.ts  日麻 JS 核心的 typed facade
 public/riichi-ui.js      日麻牌桌、手牌、交接遮罩及結算
 src/riichi-worker.js     本機日麻 Worker 來源
 public/riichi-worker.js  已打包的日麻 Worker
-scripts/build-riichi.js  重建 Worker 與複製第三方授權
+scripts/build.ts         建置 shared bundle、日麻 Worker 與第三方授權
 public/ai.js             各棋種 AI 策略
 public/ai-worker.js      背景 AI 訊息介面
 public/vendor/chess.js   鎖定的 chess.js 1.4.0 瀏覽器模組
