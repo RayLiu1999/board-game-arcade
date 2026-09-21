@@ -54,6 +54,7 @@ export class RoomManager {
   private readonly store: RoomStore;
   private readonly now: () => number;
   private readonly roomLocks = new Map<string, Promise<void>>();
+  private readonly persistenceQueues = new Map<string, Promise<void>>();
   private entryLock: Promise<void> = Promise.resolve();
   private readonly pendingOperations = new Set<Promise<unknown>>();
   private closing = false;
@@ -71,13 +72,24 @@ export class RoomManager {
     const now = this.now();
     await this.store.pruneExpired(now, []);
     const snapshots = await this.store.load(now);
-    for (const snapshot of snapshots)
-      this.rooms.set(snapshot.code, restore(snapshot));
+    for (const snapshot of snapshots) {
+      if (
+        snapshot.state.game === "riichi" &&
+        !("phase" in snapshot.state) &&
+        !snapshot.riichi
+      )
+        throw new Error(`房間 ${snapshot.code} 缺少日麻 session snapshot`);
+      const room = restore(snapshot);
+      this.rooms.set(snapshot.code, room);
+      if (snapshot.state.game === "riichi" && snapshot.riichi) {
+        room.session = this.createRiichiSession(room, snapshot.riichi);
+        room.session.pause(true);
+      }
+    }
   }
 
-  private snapshot(room: Room): RoomSnapshot | null {
-    if (room.state.game === "riichi") return null;
-    return {
+  private snapshot(room: Room): RoomSnapshot {
+    const snapshot: RoomSnapshot = {
       code: room.code,
       state: structuredClone(room.state),
       players: room.players.map((player) =>
@@ -95,6 +107,8 @@ export class RoomManager {
       touched: room.touched,
       expiresAt: room.expiresAt,
     };
+    if (room.session) snapshot.riichi = room.session.snapshot();
+    return snapshot;
   }
 
   touch(room: Room): void {
@@ -103,9 +117,33 @@ export class RoomManager {
   }
 
   async persist(room: Room): Promise<void> {
+    if (room.state.game === "riichi") {
+      await this.enqueuePersistence(room);
+      return;
+    }
+    await this.persistNow(room);
+  }
+
+  private async persistNow(room: Room): Promise<void> {
     const snapshot = this.snapshot(room);
-    if (!snapshot) return;
     room.revision = await this.store.update(snapshot, room.revision);
+  }
+
+  private enqueuePersistence(room: Room): Promise<void> {
+    const previous = this.persistenceQueues.get(room.code) ?? Promise.resolve();
+    const current = previous.catch(() => {}).then(() => this.persistNow(room));
+    this.persistenceQueues.set(room.code, current);
+    void current.then(
+      () => {
+        if (this.persistenceQueues.get(room.code) === current)
+          this.persistenceQueues.delete(room.code);
+      },
+      () => {
+        if (this.persistenceQueues.get(room.code) === current)
+          this.persistenceQueues.delete(room.code);
+      },
+    );
+    return this.track(current);
   }
 
   runExclusive<Value>(
@@ -153,7 +191,7 @@ export class RoomManager {
 
   private async createPersistentRoom(room: Room): Promise<void> {
     const snapshot = this.snapshot(room);
-    if (snapshot) await this.store.create(snapshot);
+    await this.store.create(snapshot);
   }
 
   broadcast(room: Room): void {
@@ -186,7 +224,15 @@ export class RoomManager {
 
   startRiichi(room: Room): void {
     if (room.session) return;
-    room.session = new RiichiSession({
+    room.session = this.createRiichiSession(room);
+    room.session.start();
+  }
+
+  private createRiichiSession(
+    room: Room,
+    snapshot?: Parameters<typeof RiichiSession.fromSnapshot>[0],
+  ): RiichiSession {
+    const options = {
       humans: room.players.flatMap((player, index) =>
         player && !player.bot ? [index] : [],
       ),
@@ -195,28 +241,44 @@ export class RoomManager {
         (player, index) => player?.name ?? `玩家 ${String(index + 1)}`,
       ),
       onChange: () => {
-        if (!room.session) return;
-        room.state = {
-          game: "riichi",
-          winner: room.session.done
-            ? (room.session.result?.rank?.indexOf(1) ?? -1) + 1
-            : null,
-          ply: room.session.revision,
-        };
-        room.touched = Date.now();
-        this.broadcast(room);
+        this.handleRiichiChange(room);
       },
       onError: () => {
-        room.players.forEach((player) => {
-          if (player?.socket)
-            this.sendMessage(player.socket, {
-              type: "error",
-              message: "日麻對局暫停，請重新建立房間",
-            });
-        });
+        this.notifyRiichiError(room);
       },
+    };
+    return snapshot
+      ? RiichiSession.fromSnapshot(snapshot, options)
+      : new RiichiSession(options);
+  }
+
+  private handleRiichiChange(room: Room): void {
+    const session = room.session;
+    if (!session) return;
+    room.state = {
+      game: "riichi",
+      winner: session.done
+        ? (session.result?.rank?.indexOf(1) ?? -1) + 1
+        : null,
+      ply: session.revision,
+    };
+    this.touch(room);
+    this.broadcast(room);
+    if (session.activeType === "kaiju") return;
+    void this.persist(room).catch(() => {
+      session.pause(true);
+      this.notifyRiichiError(room);
     });
-    room.session.start();
+  }
+
+  private notifyRiichiError(room: Room): void {
+    room.players.forEach((player) => {
+      if (player?.socket)
+        this.sendMessage(player.socket, {
+          type: "error",
+          message: "日麻對局暫停，請重新建立房間",
+        });
+    });
   }
 
   async detach(socket: ClientSocket): Promise<void> {

@@ -856,7 +856,7 @@ export class RiichiSession {
       },
       engine: {
         status: typeof game._status === "string" ? game._status : null,
-        reply: game._reply.map((reply) =>
+        reply: Array.from(game._reply, (reply) =>
           reply === undefined ? null : structuredClone(reply),
         ),
         paipu:

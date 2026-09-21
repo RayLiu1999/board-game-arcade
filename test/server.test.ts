@@ -495,4 +495,128 @@ if (!postgresTestUrl) {
     assert.equal(item(resumed.players, 0)?.name, "甲");
     assert.equal(item(resumed.players, 1)?.name, "乙");
   });
+
+  void test("postgres-backed riichi sessions recover after server restart", async (t) => {
+    const store1 = new PostgresRoomStore({
+      connectionString: postgresTestUrl,
+    });
+    const first = createServer({ roomStore: store1 });
+    let second: ReturnType<typeof createServer> | null = null;
+    let code: string | null = null;
+
+    const stop = async (
+      bundle: ReturnType<typeof createServer>,
+    ): Promise<void> => {
+      for (const ws of bundle.wss.clients) ws.terminate();
+      if (bundle.server.listening) await closeServer(bundle.server);
+    };
+
+    t.after(async () => {
+      await stop(first);
+      if (second) await stop(second);
+      if (code) {
+        const cleanup = new PostgresRoomStore({
+          connectionString: postgresTestUrl,
+        });
+        await cleanup.initialize();
+        await cleanup.delete(code);
+        await cleanup.close();
+      }
+    });
+
+    await first.ready;
+    first.server.listen(0, "127.0.0.1");
+    await once(first.server, "listening");
+    const firstUrl = `ws://127.0.0.1:${String(portOf(first.server))}`;
+    const clients = await Promise.all(
+      Array.from({ length: 4 }, () => client(firstUrl)),
+    );
+    const tokens: string[] = [];
+    const host = item(clients, 0);
+    host.send({ type: "create", game: "riichi", rounds: 0, name: "甲" });
+    const joined = await host.next("joined");
+    code = joined.code;
+    tokens.push(joined.token);
+    await host.next("state");
+    for (let id = 1; id < 4; id++) {
+      const current = item(clients, id);
+      current.send({
+        type: "join",
+        code: joined.code,
+        name: `玩家${String(id)}`,
+      });
+      const currentJoined = await current.next("joined");
+      tokens.push(currentJoined.token);
+      await current.next("state");
+    }
+
+    const until = async (
+      current: TestClient,
+      predicate: (message: StateMessage) => boolean,
+    ): Promise<StateMessage> => {
+      for (let n = 0; n < 40; n++) {
+        const message = await current.next("state");
+        if (predicate(message)) return message;
+      }
+      throw new Error("No expected state");
+    };
+    const before = await until(host, (message) => {
+      if (!isRiichiView(message.state)) return false;
+      const view = riichiView(message.state);
+      return view.hand.length === 14 && view.ply >= 3;
+    });
+    const beforeView = riichiView(before.state);
+    await stop(first);
+
+    const store2 = new PostgresRoomStore({
+      connectionString: postgresTestUrl,
+    });
+    second = createServer({ roomStore: store2 });
+    await second.ready;
+    second.server.listen(0, "127.0.0.1");
+    await once(second.server, "listening");
+    const secondUrl = `ws://127.0.0.1:${String(portOf(second.server))}`;
+    const resumedClients = await Promise.all(
+      Array.from({ length: 4 }, () => client(secondUrl)),
+    );
+    const initialResumedStates: StateMessage[] = [];
+    for (let id = 0; id < 4; id++) {
+      const current = item(resumedClients, id);
+      current.send({
+        type: "join",
+        code: joined.code,
+        token: item(tokens, id),
+      });
+      assert.equal((await current.next("joined")).side, id + 1);
+      initialResumedStates.push(await current.next("state"));
+    }
+
+    const resumedMessages = await Promise.all(
+      resumedClients.map((current, id) => {
+        const initial = item(initialResumedStates, id);
+        if (isRiichiView(initial.state) && !riichiView(initial.state).paused)
+          return Promise.resolve(initial);
+        return until(current, (message) => {
+          if (!isRiichiView(message.state)) return false;
+          const view = riichiView(message.state);
+          return view.ply === beforeView.ply && !view.paused;
+        });
+      }),
+    );
+    const resumedView = riichiView(item(resumedMessages, 0).state);
+    assert.deepEqual(resumedView, beforeView);
+
+    const action = resumedView.choices.find(
+      (choice) => choice.kind === "discard",
+    );
+    assert.ok(action);
+    item(resumedClients, 0).send({
+      type: "riichi-action",
+      actionId: action.id,
+    });
+    await until(item(resumedClients, 0), (message) => {
+      if (!isRiichiView(message.state)) return false;
+      return riichiView(message.state).seats[0]?.river.length === 1;
+    });
+  });
 }

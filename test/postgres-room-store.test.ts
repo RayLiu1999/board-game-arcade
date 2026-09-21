@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 
+import { RiichiSession } from "../lib/riichi-session.js";
 import { applyMove, createGame } from "../src/shared/engine.js";
 import { PostgresRoomStore } from "../src/server/postgres-room-store.js";
 import {
@@ -88,5 +89,50 @@ if (!databaseUrl) {
       touched: saved.expiresAt + 2,
       expiresAt: saved.expiresAt + 2 + ROOM_TTL_MS,
     });
+  });
+
+  void test("PostgreSQL room store persists riichi session snapshots", async (t) => {
+    const store = new PostgresRoomStore({ connectionString: databaseUrl });
+    const recoveredStore = new PostgresRoomStore({
+      connectionString: databaseUrl,
+    });
+    const code = `R${randomBytes(3).toString("hex").slice(0, 5).toUpperCase()}`;
+    const session = new RiichiSession({ humans: [0], auto: false, rounds: 0 });
+    session.start();
+    for (let i = 0; i < 10; i++) session.step();
+    const now = Date.now();
+    const snapshot: RoomSnapshot = {
+      code,
+      state: {
+        game: "riichi",
+        winner: null,
+        ply: session.revision,
+      },
+      players: [
+        { name: "你", tokenHash: "a".repeat(64), bot: false },
+        { name: "AI 南", tokenHash: "b".repeat(64), bot: true },
+        { name: "AI 西", tokenHash: "c".repeat(64), bot: true },
+        { name: "AI 北", tokenHash: "d".repeat(64), bot: true },
+      ],
+      rounds: 0,
+      rematch: [],
+      revision: 0,
+      touched: now,
+      expiresAt: now + ROOM_TTL_MS,
+      riichi: session.snapshot(),
+    };
+
+    t.after(async () => {
+      session.close();
+      await store.delete(code).catch(() => {});
+      await store.close();
+      await recoveredStore.close();
+    });
+
+    await store.initialize();
+    await recoveredStore.initialize();
+    await store.create(snapshot);
+    const loaded = await recoveredStore.load(now);
+    assert.deepEqual(loaded, [snapshot]);
   });
 }

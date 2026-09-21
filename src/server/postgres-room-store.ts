@@ -1,9 +1,19 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 import { Pool, type PoolClient, type PoolConfig } from "pg";
 
-import type { BoardGameId, BoardState } from "../shared/game-types.js";
+import {
+  parseRiichiSessionSnapshot,
+  type RiichiSessionSnapshot,
+} from "../../lib/riichi-session.js";
+import type {
+  BoardGameId,
+  BoardState,
+  RiichiWaitingState,
+} from "../shared/game-types.js";
 import { isGameId } from "../shared/protocol.js";
+import type { RiichiSummary } from "./room-types.js";
 import {
   RoomStoreConflictError,
   type RoomSnapshot,
@@ -20,6 +30,7 @@ interface RoomPlayerRow {
   readonly revision: number | string;
   readonly touched_at: Date;
   readonly expires_at: Date;
+  readonly riichi_json: unknown;
   readonly seat: number | null;
   readonly name: string | null;
   readonly token_hash: string | null;
@@ -31,10 +42,7 @@ export interface PostgresRoomStoreOptions {
   pool?: Pool;
 }
 
-const migrationUrl = new URL(
-  "./migrations/001-room-store.sql",
-  import.meta.url,
-);
+const migrationDirectory = new URL("./migrations/", import.meta.url);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -51,6 +59,54 @@ const boardState = (value: unknown): BoardState => {
   const game = boardGame(value.game);
   if (!Array.isArray(value.board)) throw new Error("資料庫棋盤格式錯誤");
   return { ...value, game } as BoardState;
+};
+
+const riichiState = (value: unknown): RiichiSummary => {
+  if (
+    !isRecord(value) ||
+    value.game !== "riichi" ||
+    (typeof value.winner !== "number" && value.winner !== null) ||
+    typeof value.ply !== "number" ||
+    !Number.isSafeInteger(value.ply) ||
+    value.ply < 0
+  )
+    throw new Error("資料庫日麻房間 state 格式錯誤");
+  return {
+    game: "riichi",
+    winner: value.winner,
+    ply: value.ply,
+  };
+};
+
+const riichiWaitingState = (
+  value: Record<string, unknown>,
+): RiichiWaitingState => {
+  if (
+    value.phase !== "waiting" ||
+    value.winner !== null ||
+    value.ply !== 0 ||
+    !Array.isArray(value.history) ||
+    value.history.length !== 0
+  )
+    throw new Error("資料庫日麻等待房間 state 格式錯誤");
+  return {
+    game: "riichi",
+    phase: "waiting",
+    winner: null,
+    ply: 0,
+    history: [],
+  };
+};
+
+const roomState = (
+  value: unknown,
+): BoardState | RiichiSummary | RiichiWaitingState => {
+  if (!isRecord(value) || typeof value.game !== "string")
+    throw new Error("資料庫房間 state 格式錯誤");
+  if (value.game !== "riichi") return boardState(value);
+  return value.phase === "waiting"
+    ? riichiWaitingState(value)
+    : riichiState(value);
 };
 
 const rematch = (value: unknown): number[] => {
@@ -87,6 +143,9 @@ const player = (row: RoomPlayerRow): StoredRoomPlayer => {
   };
 };
 
+const riichiSnapshot = (value: unknown): RiichiSessionSnapshot =>
+  parseRiichiSessionSnapshot(value);
+
 export class PostgresRoomStore implements RoomStore {
   private readonly pool: Pool;
 
@@ -102,8 +161,16 @@ export class PostgresRoomStore implements RoomStore {
   }
 
   async initialize(): Promise<void> {
-    const migration = await readFile(migrationUrl, "utf8");
-    await this.pool.query(migration);
+    const files = (await readdir(fileURLToPath(migrationDirectory)))
+      .filter((file) => file.endsWith(".sql"))
+      .sort();
+    for (const file of files) {
+      const migration = await readFile(
+        new URL(file, migrationDirectory),
+        "utf8",
+      );
+      await this.pool.query(migration);
+    }
   }
 
   async load(now: number): Promise<RoomSnapshot[]> {
@@ -118,6 +185,7 @@ export class PostgresRoomStore implements RoomStore {
           r.revision,
           r.touched_at,
           r.expires_at,
+          r.riichi_json,
           p.seat,
           p.name,
           p.token_hash,
@@ -133,19 +201,25 @@ export class PostgresRoomStore implements RoomStore {
     for (const row of result.rows) {
       let snapshot = rooms.get(row.code);
       if (!snapshot) {
-        const state = boardState(row.state_json);
-        if (state.game !== boardGame(row.game))
+        const state = roomState(row.state_json);
+        if (state.game !== row.game)
           throw new Error(`房間 ${row.code} 的棋種與 state 不一致`);
         snapshot = {
           code: row.code,
           state,
-          players: Array<StoredRoomPlayer | null>(2).fill(null),
+          players: Array<StoredRoomPlayer | null>(
+            state.game === "riichi" ? 4 : 2,
+          ).fill(null),
           rounds: row.rounds,
           rematch: rematch(row.rematch_json),
           revision: revision(row.revision),
           touched: dateMillis(row.touched_at),
           expiresAt: dateMillis(row.expires_at),
         };
+        if (state.game === "riichi" && row.riichi_json !== null)
+          snapshot.riichi = riichiSnapshot(row.riichi_json);
+        if (state.game !== "riichi" && row.riichi_json !== null)
+          throw new Error(`一般棋類房間 ${row.code} 不應有日麻 snapshot`);
         rooms.set(row.code, snapshot);
       }
       if (row.seat !== null) {
@@ -177,9 +251,9 @@ export class PostgresRoomStore implements RoomStore {
         `
           INSERT INTO qiju_rooms (
             code, game, state_json, rounds, rematch_json,
-            revision, touched_at, expires_at
+            revision, touched_at, expires_at, riichi_json
           )
-          VALUES ($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7, $8)
+          VALUES ($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7, $8, $9::jsonb)
         `,
         this.roomParameters(snapshot),
       );
@@ -202,8 +276,9 @@ export class PostgresRoomStore implements RoomStore {
             rematch_json = $4::jsonb,
             revision = $5,
             touched_at = $6,
-            expires_at = $7
-          WHERE code = $1 AND revision = $8
+            expires_at = $7,
+            riichi_json = $8::jsonb
+          WHERE code = $1 AND revision = $9
         `,
         [
           snapshot.code,
@@ -213,6 +288,7 @@ export class PostgresRoomStore implements RoomStore {
           nextRevision,
           new Date(snapshot.touched),
           new Date(snapshot.expiresAt),
+          snapshot.riichi ? JSON.stringify(snapshot.riichi) : null,
           expectedRevision,
         ],
       );
@@ -244,6 +320,7 @@ export class PostgresRoomStore implements RoomStore {
       snapshot.revision,
       new Date(snapshot.touched),
       new Date(snapshot.expiresAt),
+      snapshot.riichi ? JSON.stringify(snapshot.riichi) : null,
     ];
   }
 
