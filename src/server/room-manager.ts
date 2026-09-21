@@ -55,6 +55,9 @@ export class RoomManager {
   private readonly now: () => number;
   private readonly roomLocks = new Map<string, Promise<void>>();
   private entryLock: Promise<void> = Promise.resolve();
+  private readonly pendingOperations = new Set<Promise<unknown>>();
+  private closing = false;
+  private closePromise: Promise<void> | null = null;
 
   constructor(options: RoomManagerOptions = {}) {
     this.sendMessage = options.sendMessage ?? send;
@@ -105,7 +108,15 @@ export class RoomManager {
     room.revision = await this.store.update(snapshot, room.revision);
   }
 
-  async runExclusive<Value>(
+  runExclusive<Value>(
+    code: string,
+    operation: () => Promise<Value>,
+  ): Promise<Value> {
+    this.assertOpen();
+    return this.track(this.runExclusiveUnsafe(code, operation));
+  }
+
+  private async runExclusiveUnsafe<Value>(
     code: string,
     operation: () => Promise<Value>,
   ): Promise<Value> {
@@ -210,7 +221,10 @@ export class RoomManager {
 
   async detach(socket: ClientSocket): Promise<void> {
     const code = socket.room;
-    if (!code) return;
+    if (!code || this.closing) {
+      socket.room = null;
+      return;
+    }
     await this.runExclusive(code, async () => {
       const room = this.rooms.get(code);
       if (!room) {
@@ -233,8 +247,13 @@ export class RoomManager {
     socket: ClientSocket,
     message: Extract<ClientMessage, { type: "create" | "join" }>,
   ): Promise<void> {
-    await this.ready;
-    await this.runEntry(() => this.handleEntryUnsafe(socket, message));
+    this.assertOpen();
+    return this.track(
+      (async () => {
+        await this.ready;
+        await this.runEntry(() => this.handleEntryUnsafe(socket, message));
+      })(),
+    );
   }
 
   private async handleEntryUnsafe(
@@ -320,8 +339,13 @@ export class RoomManager {
   }
 
   async pruneInactive(now = this.now()): Promise<void> {
+    if (this.closing) return;
+    return this.track(this.pruneInactiveUnsafe(now));
+  }
+
+  private async pruneInactiveUnsafe(now: number): Promise<void> {
     for (const [code] of this.rooms) {
-      await this.runExclusive(code, async () => {
+      await this.runExclusiveUnsafe(code, async () => {
         const room = this.rooms.get(code);
         if (
           room &&
@@ -337,9 +361,38 @@ export class RoomManager {
     await this.store.pruneExpired(now, [...this.rooms.keys()]);
   }
 
-  async closeAll(): Promise<void> {
+  closeAll(): Promise<void> {
+    if (!this.closePromise) {
+      this.closing = true;
+      this.closePromise = this.finishClose();
+    }
+    return this.closePromise;
+  }
+
+  private async finishClose(): Promise<void> {
+    await this.ready.catch(() => {});
+    await this.waitForPendingOperations();
     for (const room of this.rooms.values()) room.session?.close();
     await this.store.close();
+  }
+
+  private assertOpen(): void {
+    if (this.closing) throw new Error("伺服器正在關閉");
+  }
+
+  private track<Value>(operation: Promise<Value>): Promise<Value> {
+    this.pendingOperations.add(operation);
+    void operation.then(
+      () => this.pendingOperations.delete(operation),
+      () => this.pendingOperations.delete(operation),
+    );
+    return operation;
+  }
+
+  private async waitForPendingOperations(): Promise<void> {
+    while (this.pendingOperations.size > 0) {
+      await Promise.allSettled([...this.pendingOperations]);
+    }
   }
 }
 
