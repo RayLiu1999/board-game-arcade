@@ -1,0 +1,113 @@
+import { randomBytes } from "node:crypto";
+
+import { applyMove, createGame, scoringAction } from "../shared/engine.js";
+import type { ClientMessage, PlayerSide } from "../shared/protocol.js";
+import type { ClientSocket, SocketSide } from "./room-types.js";
+import { send } from "./room-manager.js";
+import type { RoomManager } from "./room-manager.js";
+
+const boardSide = (side: SocketSide): PlayerSide => {
+  if (side === 1 || side === -1) return side;
+  throw new Error("只有棋類房間可執行此操作");
+};
+
+const seatIndex = (side: SocketSide): number => {
+  if (side < 1 || side > 4) throw new Error("無效日麻座位");
+  return side - 1;
+};
+
+export function handleClientMessage(
+  socket: ClientSocket,
+  message: ClientMessage,
+  roomManager: RoomManager,
+): void {
+  const { rooms } = roomManager;
+  if (message.type === "create" || message.type === "join") {
+    roomManager.handleEntry(socket, message);
+    return;
+  }
+  if (message.type === "leave") {
+    roomManager.detach(socket);
+    send(socket, { type: "left" });
+    return;
+  }
+
+  if (!socket.room) throw new Error("尚未加入房間");
+  const room = rooms.get(socket.room);
+  if (!room) throw new Error("尚未加入房間");
+
+  if (message.type === "riichi-start") {
+    if (room.state.game !== "riichi" || socket.side !== 1 || room.session)
+      throw new Error("只有房主可在開局前補入 AI");
+    if (room.players.some((player) => player && !player.bot && !player.socket))
+      throw new Error("請等待已加入的玩家重新連線");
+    room.players = room.players.map(
+      (player, index) =>
+        player ?? {
+          name: `AI 玩家 ${String(index + 1)}`,
+          token: randomBytes(24).toString("hex"),
+          bot: true,
+        },
+    );
+    roomManager.startRiichi(room);
+    return;
+  }
+
+  if (!roomManager.isReady(room)) throw new Error("等待對手連線");
+  if (message.type === "riichi-action") {
+    if (room.state.game !== "riichi" || !room.session)
+      throw new Error("日麻尚未開局");
+    room.session.act(seatIndex(socket.side), message.actionId);
+    return;
+  }
+  if (message.type === "move") {
+    if (room.state.game === "riichi") throw new Error("日麻請使用專用操作");
+    const side = boardSide(socket.side);
+    if (room.state.turn !== side) throw new Error("還沒輪到你");
+    if (message.ply !== room.state.ply)
+      throw new Error("棋局已更新，請重新落子");
+    room.state = applyMove(room.state, message.move);
+  } else if (
+    message.type === "dead" ||
+    message.type === "accept" ||
+    message.type === "resume"
+  ) {
+    if (room.state.game !== "go") throw new Error("目前不在圍棋數子階段");
+    room.state = scoringAction(
+      room.state,
+      {
+        type: message.type,
+        ...(message.to === undefined ? {} : { to: message.to }),
+      },
+      boardSide(socket.side),
+    );
+  } else if (message.type === "resign") {
+    if (room.state.game === "riichi")
+      throw new Error("日麻請透過返回大廳離開，對局將暫停");
+    if (room.state.winner !== null) throw new Error("本局已結束");
+    const side = boardSide(socket.side);
+    room.state = {
+      ...room.state,
+      winner: side === 1 ? -1 : 1,
+      reason: "對手認輸",
+    };
+  } else {
+    if (room.state.winner === null) throw new Error("請先完成本局");
+    room.rematch = [...new Set([...room.rematch, socket.side])];
+    const humanCount = room.players.filter(
+      (player) => player !== null && !player.bot,
+    ).length;
+    if (room.rematch.length === humanCount) {
+      room.rematch = [];
+      if (room.state.game === "riichi") {
+        room.session?.close();
+        room.session = null;
+        roomManager.startRiichi(room);
+      } else {
+        room.state = createGame(room.state.game, room.state.rows);
+      }
+    }
+  }
+  room.touched = Date.now();
+  roomManager.broadcast(room);
+}
