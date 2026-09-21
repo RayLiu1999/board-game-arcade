@@ -474,13 +474,40 @@ src/server/
 
 #### 5.5 線上資料持久化
 
-目前房間存在單一 Node 程序記憶體中。若要正式公開，需要考慮：
+目前房間存在單一 Node 程序記憶體中。P0 採用線上 PostgreSQL 作為主要持久化來源，先解決單一 Node 程序重啟後一般棋類房間消失的問題；Redis 不列入目前單實例部署的必要依賴。
 
-- Redis 或資料庫保存房間與 session
-- 多實例同步
-- 伺服器重啟後恢復對局
-- 房間 TTL 與清理策略
-- WebSocket rate limit 與 abuse protection
+##### P0 範圍：完成第 1～3 項
+
+1. **PostgreSQL schema 與 `RoomStore` abstraction**
+   - 以 `RoomStore` 隔離房間服務與資料庫實作。
+   - 建立 rooms、room players 與必要版本欄位的 migration。
+   - 一般棋類以可序列化的 state 保存；不把 WebSocket 或日麻 live session 直接寫入資料庫。
+
+2. **一般棋類 snapshot／重啟恢復**
+   - 建立房間、加入房間、落子、認輸與再戰時同步保存一般棋類 snapshot。
+   - Node 程序啟動時載入未過期房間，讓玩家以原本的 room code 與 token reconnect。
+   - 以 revision／樂觀並發控制避免舊操作覆蓋較新的棋局。
+
+3. **token hash、TTL 與 restart integration test**
+   - PostgreSQL 只保存 reconnect token 的 hash；瀏覽器仍持有原始 token 供重連使用。
+   - 保存 `expires_at`，於啟動及定期清理過期、且無活躍連線的房間。
+   - 使用與正式環境相同的 PostgreSQL 引擎驗證建立、落子、重啟恢復、過期清理與錯誤並發案例。
+
+P0 完成條件是：一般棋類房間在 Node 程序重啟後仍能恢復並繼續遊玩，敏感 token 不以明文存於資料庫，且資料庫整合測試能在 CI 或指定測試環境重現核心流程。
+
+##### P1 範圍：完成第 4～5 項
+
+4. **日麻 `snapshot()`／`restore()` 或 event replay**
+   - 不直接序列化 `Majiang.Game`、timer、queue 或 callback。
+   - 評估以可驗證的 snapshot 還原，或以初始 seed／牌局事件／真人 action／AI 回應重播。
+   - 補上暗牌隔離、暫停／重連、進行中 action 與伺服器重啟後恢復的整合測試。
+
+5. **多實例時加入 Redis**
+   - 僅在需要多個 Node server 時導入 Redis。
+   - 用於跨實例 presence、房間變更通知與短期快取；PostgreSQL 仍是房間狀態與持久化真實來源。
+   - 再依部署規模補上 sticky session、故障轉移、監控與資料庫備份策略。
+
+WebSocket rate limit 與 abuse protection 已在伺服器層先行存在；後續仍可依公開服務流量補強觀測、封鎖與管理工具。
 
 ### P1：提升 AI 品質
 
