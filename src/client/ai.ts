@@ -13,7 +13,16 @@ import type {
 } from "../shared/game-types.js";
 
 export type Difficulty = "easy" | "medium" | "hard";
+export type RandomSource = () => number;
 type PlacedMove = GameMove & { to: number };
+
+export function createSeededRandom(seed: number): RandomSource {
+  let state = seed >>> 0;
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 0x100000000;
+  };
+}
 
 const values: Record<string, number> = {
   p: 100,
@@ -210,6 +219,7 @@ const advance = (state: BoardState, move: GameMove): BoardState => {
 export function chooseMove(
   state: BoardState,
   difficulty: Difficulty = "medium",
+  random: RandomSource = Math.random,
 ): GameMove | null {
   const moves = legalMoves(state);
   if (!moves.length) return null;
@@ -228,7 +238,7 @@ export function chooseMove(
         value:
           linePotential(state, move.to, state.turn) * 1.15 +
           linePotential(state, move.to, state.turn === 1 ? -1 : 1) +
-          Math.random() * noise,
+          random() * noise,
       }))
       .sort((left, right) => right.value - left.value);
     return ranked[0]?.move ?? placed[0] ?? null;
@@ -244,8 +254,7 @@ export function chooseMove(
         value:
           move.pass === true
             ? -5
-            : goRank(state, move) +
-              Math.random() * (difficulty === "easy" ? 10 : 2),
+            : goRank(state, move) + random() * (difficulty === "easy" ? 10 : 2),
       }))
       .sort((left, right) => right.value - left.value);
     if (state.passes === 1 && state.ply > state.rows * state.cols * 0.7)
@@ -295,8 +304,7 @@ export function chooseMove(
   let choice = first.move;
   for (const option of options) {
     const score =
-      search(option.next, depth - 1, -Infinity, Infinity) +
-      Math.random() * noise;
+      search(option.next, depth - 1, -Infinity, Infinity) + random() * noise;
     if (score > best) {
       best = score;
       choice = option.move;

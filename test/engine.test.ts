@@ -8,7 +8,7 @@ import {
   scoringAction,
   areaScore,
 } from "../src/shared/engine.js";
-import { chooseMove } from "../src/client/ai.js";
+import { chooseMove, createSeededRandom } from "../src/client/ai.js";
 import type {
   BoardGameId,
   BoardState,
@@ -236,6 +236,12 @@ register("gomoku AI finishes a win and blocks immediate defeat", () => {
   const blockingMove = chooseMove(s, "hard");
   assert.ok(blockingMove);
   assert.equal(blockingMove.to, 4);
+});
+register("seeded AI decisions are reproducible", () => {
+  const state = numericGame("reversi");
+  const first = chooseMove(state, "easy", createSeededRandom(2026));
+  const second = chooseMove(state, "easy", createSeededRandom(2026));
+  assert.deepEqual(second, first);
 });
 register("reversi flips enclosed stones and ends with a score", () => {
   let s = numericGame("reversi");
