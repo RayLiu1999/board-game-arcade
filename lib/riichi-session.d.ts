@@ -108,6 +108,7 @@ export class RiichiSession {
   readonly game: RiichiCoreGame;
   readonly pending: ReadonlyMap<number, { readonly choices: RiichiChoice[] }>;
   readonly revision: number;
+  readonly paused: boolean;
   readonly done: boolean;
   readonly result: RiichiResult | null;
   start(): void;
