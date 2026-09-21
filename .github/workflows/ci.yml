@@ -58,12 +58,9 @@ jobs:
         run: npm run build
 
       - name: Run tests
-        run: npm test
-
-      - name: Run PostgreSQL integration tests
         env:
           QIJU_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/qiju_test
-        run: npm run test:postgres
+        run: npm test
 
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
