@@ -19,9 +19,11 @@
 ```text
 src/
 ├─ client/       app、AI、UI 與瀏覽器 Worker 原始碼
-├─ server/       HTTP、WebSocket、房間服務
+├─ server/       HTTP、WebSocket、房間服務與協定分派
 ├─ shared/       一般棋類規則、狀態與通訊型別
-└─ riichi/       日麻 session 原始碼（逐步遷移中）
+└─ types/        第三方套件的最小型別宣告
+
+lib/              可供 Node.js 與日麻 Worker 共用的 session core
 
 scripts/         TypeScript 建置與開發工具
 test/            TypeScript 規則、整合與 E2E 測試
@@ -66,10 +68,11 @@ TypeScript 品質門檻：
           │ WebSocket
           ▼
 Node.js src/server/server.ts
-├─ HTTP 靜態檔案服務
-├─ WebSocket 房間與玩家管理
-├─ 一般棋類權威驗證
-└─ RiichiSession 日麻伺服器對局
+├─ http-server.ts：HTTP 靜態檔案服務
+├─ websocket-server.ts：連線生命週期、心跳與錯誤邊界
+├─ room-manager.ts：房間與日麻 session 生命週期
+├─ game-protocol.ts：一般棋類、圍棋、日麻與再戰 command 分派
+└─ shared/ + lib/：權威規則與日麻伺服器對局
 ```
 
 ### 2.1 一般棋類的資料流
@@ -142,7 +145,7 @@ majiang-core 推進牌局事件
 
 ### `src/`：需要建置或由 `tsx` 執行的來源碼
 
-`src/shared/` 放置前後端共用的狀態、訊息型別與棋規；`src/server/server.ts` 是 HTTP／WebSocket 伺服器來源。`src/riichi-worker.ts` 是本機日麻 Worker 的來源檔，仍使用 npm 套件，必須先由 esbuild 打包才能在瀏覽器執行。
+`src/shared/` 放置前後端共用的狀態、訊息型別與棋規；`src/server/` 由 `server.ts` 組裝 HTTP、WebSocket、房間與 command protocol 模組。`src/riichi-worker.ts` 是本機日麻 Worker 的來源檔，仍使用 npm 套件，必須先由 esbuild 打包才能在瀏覽器執行。
 
 ```text
 src/shared/engine.ts ─┐
@@ -165,11 +168,11 @@ public/engine.js / public/shogi.js / public/riichi-worker.js
 
 ### `test/`：規則與整合測試
 
-- `engine.test.js`：一般棋類共用規則
-- `shogi.test.js`：將棋特殊規則
-- `riichi.test.js`：日麻合法選項、計分與暗牌隔離
-- `riichi-worker.test.js`：本機日麻 Worker
-- `server.test.js`：HTTP、WebSocket 房間、重連與權威驗證
+- `engine.test.ts`：一般棋類共用規則
+- `shogi.test.ts`：將棋特殊規則
+- `riichi.test.ts`：日麻合法選項、計分與暗牌隔離
+- `riichi-worker.test.ts`：本機日麻 Worker
+- `server.test.ts`：HTTP、WebSocket 房間、重連與權威驗證
 
 ---
 
@@ -421,14 +424,17 @@ TS 工具鏈與 CI
 
 #### 5.1 重新整理共享程式
 
-目前已改為 `src/server/server.ts` 直接引用 `src/shared/engine.ts`，瀏覽器則載入建置後的 `public/engine.js`。目錄責任是：
+目前已改為 `src/server/game-protocol.ts` 直接引用 `src/shared/engine.ts`，瀏覽器則載入建置後的 `public/engine.js`。`src/server/server.ts` 只負責組裝 HTTP、WebSocket 與房間服務。目錄責任是：
 
 ```text
 src/
 ├─ client/
 ├─ server/
 ├─ shared/
-└─ riichi/
+└─ types/
+
+lib/
+└─ riichi-session.ts
 
 public/
 └─ build assets
@@ -436,7 +442,7 @@ public/
 
 將棋規、一般棋規與 state 放入 `shared/`，由 client 與 server 共用；`public/` 只保留瀏覽器成品。
 
-#### 5.2 加入型別與訊息 schema（P0 已開始落地）
+#### 5.2 加入型別與訊息 schema（P0 已落地）
 
 由 `src/shared/protocol.ts` 與 `src/shared/game-types.ts` 明確定義：
 
@@ -448,7 +454,7 @@ public/
 
 #### 5.3 拆分伺服器責任
 
-目前先完成 `src/server/server.ts` 的 TS 化與訊息邊界驗證；下一步再將單檔房間服務拆成：
+P0 已完成 `src/server/server.ts` 的 TS 化與訊息邊界驗證，並將原本的單檔房間服務拆成：
 
 ```text
 src/server/
@@ -456,7 +462,8 @@ src/server/
 ├─ websocket-server.ts
 ├─ room-manager.ts
 ├─ game-protocol.ts
-└─ riichi-room.ts
+├─ room-types.ts
+└─ server.ts
 ```
 
 #### 5.4 強化測試品質
@@ -602,7 +609,7 @@ AI 的隨機噪聲也應支援可注入的 seed，讓測試可以重現。
 2. 建立 state 與 WebSocket message schema
 3. 加入 deterministic AI seed
 4. 增加 CI、格式檢查與 E2E 測試
-5. 拆分 `src/server/server.ts`
+5. 拆分 `src/server/server.ts`（P0 已完成）
 
 ### 第二階段：核心可玩性
 

@@ -82,7 +82,12 @@ Node 內建測試執行器：棋規（含將棋打入／升變／打步詰）、
 ## 程式結構
 
 ```text
-src/server/server.ts     HTTP 靜態檔案與權威 WebSocket 房間
+src/server/server.ts     HTTP、WebSocket 與房間模組的組裝入口
+src/server/http-server.ts 靜態檔案服務與 port parser
+src/server/websocket-server.ts WebSocket 連線生命週期與錯誤邊界
+src/server/room-manager.ts 房間建立、廣播、日麻啟動與清理
+src/server/game-protocol.ts client command 的權威分派
+src/server/room-types.ts 房間、socket 與玩家 domain type
 src/shared/engine.ts     一般棋類共用規則與狀態轉移
 src/shared/shogi.ts      將棋規則與持駒
 src/shared/protocol.ts   WebSocket 訊息型別與 runtime parser
