@@ -212,6 +212,47 @@ register(
 );
 
 register(
+  "riichi snapshots restore hidden state, pending actions, and bot thinking",
+  () => {
+    const original = new RiichiSession({ humans: [0], auto: false, rounds: 0 });
+    original.start();
+    for (let i = 0; i < 10; i++) original.step();
+    const snapshot = original.snapshot();
+    const serialized = JSON.stringify(snapshot);
+    assert.doesNotMatch(serialized, /callback|timer|queue|_players/);
+
+    const restored = RiichiSession.fromSnapshot(snapshot, { auto: false });
+    try {
+      assert.deepEqual(restored.view(0), original.view(0));
+      const action = original.view(0).choices[0];
+      assert.ok(action);
+      restored.act(0, action.id);
+      original.act(0, action.id);
+
+      for (let i = 0; i < 40 && !original.done; i++) {
+        if (original.pending.size) {
+          const next = original
+            .view(0)
+            .choices.find((choice) => choice.kind === "discard");
+          const fallback = original.view(0).choices[0];
+          assert.ok(next ?? fallback);
+          const choice = next ?? fallback;
+          assert.ok(choice);
+          original.act(0, choice.id);
+          restored.act(0, choice.id);
+        } else {
+          assert.equal(original.step(), restored.step());
+        }
+        assert.deepEqual(restored.view(0), original.view(0));
+      }
+    } finally {
+      original.close();
+      restored.close();
+    }
+  },
+);
+
+register(
   "seven pairs tsumo pays correct fu, han, dealer points and final scores",
   () => {
     const s = started();

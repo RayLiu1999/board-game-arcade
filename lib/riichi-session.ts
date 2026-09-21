@@ -23,6 +23,74 @@ export interface RiichiSessionOptions {
   auto?: boolean;
 }
 
+export interface RiichiShanSnapshot {
+  readonly pai: string[];
+  readonly baopai: string[];
+  readonly fubaopai: string[] | null;
+  readonly weikaigang: boolean;
+  readonly closed: boolean;
+}
+
+export interface RiichiModelSnapshot {
+  readonly title: string;
+  readonly player: string[];
+  readonly qijia: number;
+  readonly zhuangfeng: number;
+  readonly jushu: number;
+  readonly changbang: number;
+  readonly lizhibang: number;
+  readonly defen: number[];
+  readonly shan: RiichiShanSnapshot | null;
+  readonly shoupai: string[];
+  readonly he: string[][];
+  readonly playerId: number[];
+  readonly lunban: number;
+  readonly board: {
+    readonly lizhi: boolean;
+    readonly fenpei: number[] | null;
+    readonly lianzhuang: boolean;
+    readonly changbang: number;
+    readonly lizhibang: number;
+  };
+}
+
+export interface RiichiEngineSnapshot {
+  readonly status: string | null;
+  readonly reply: Array<MajiangReply | null>;
+  readonly paipu: Record<string, unknown> | null;
+  readonly diyizimo: boolean;
+  readonly fengpai: boolean;
+  readonly dapai: string | null;
+  readonly gang: string | null;
+  readonly lizhi: number[];
+  readonly yifa: number[];
+  readonly nGang: number[];
+  readonly nengRong: boolean[];
+  readonly hule: number[];
+  readonly huleOption: string | null;
+  readonly noGame: boolean;
+  readonly lianzhuang: boolean;
+  readonly changbang: number;
+  readonly fenpei: number[] | null;
+  readonly maxJushu: number;
+  readonly activeType: string | null;
+}
+
+export interface RiichiSessionSnapshot {
+  readonly version: 1;
+  readonly humans: number[];
+  readonly rounds: number;
+  readonly names: string[];
+  readonly revision: number;
+  readonly started: boolean;
+  readonly paused: boolean;
+  readonly done: boolean;
+  readonly result: RiichiResult | null;
+  readonly history: RiichiHistoryEntry[];
+  readonly model: RiichiModelSnapshot;
+  readonly engine: RiichiEngineSnapshot;
+}
+
 export interface RiichiResult {
   readonly type: string;
   readonly rank?: number[];
@@ -99,7 +167,7 @@ interface RiichiPrompt {
   readonly choices: RiichiPendingChoice[];
 }
 
-interface RiichiHistoryEntry {
+export interface RiichiHistoryEntry {
   readonly label: string;
 }
 
@@ -166,6 +234,254 @@ const stringOrNumberArrayAt = (
     throw new Error(`日麻事件缺少文字或數字陣列欄位：${key}`);
   return value;
 };
+
+const integerAt = (
+  data: Record<string, unknown>,
+  key: string,
+  minimum?: number,
+): number => {
+  const value = data[key];
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    (minimum !== undefined && value < minimum)
+  )
+    throw new Error(`日麻快照缺少有效整數欄位：${key}`);
+  return value;
+};
+
+const booleanAt = (data: Record<string, unknown>, key: string): boolean => {
+  const value = data[key];
+  if (typeof value !== "boolean")
+    throw new Error(`日麻快照缺少布林欄位：${key}`);
+  return value;
+};
+
+const nullableStringAt = (
+  data: Record<string, unknown>,
+  key: string,
+): string | null => {
+  const value = data[key];
+  if (value !== null && typeof value !== "string")
+    throw new Error(`日麻快照缺少文字欄位：${key}`);
+  return value;
+};
+
+const stringArrayAt = (
+  data: Record<string, unknown>,
+  key: string,
+  length?: number,
+): string[] => {
+  const value = data[key];
+  if (
+    !Array.isArray(value) ||
+    (length !== undefined && value.length !== length) ||
+    !value.every((entry: unknown): entry is string => typeof entry === "string")
+  )
+    throw new Error(`日麻快照缺少文字陣列欄位：${key}`);
+  return [...value];
+};
+
+const integerArrayAt = (
+  data: Record<string, unknown>,
+  key: string,
+  length?: number,
+): number[] => {
+  const value = data[key];
+  if (
+    !Array.isArray(value) ||
+    (length !== undefined && value.length !== length) ||
+    !value.every(
+      (entry: unknown): entry is number =>
+        typeof entry === "number" && Number.isSafeInteger(entry),
+    )
+  )
+    throw new Error(`日麻快照缺少整數陣列欄位：${key}`);
+  return [...value];
+};
+
+const booleanArrayAt = (
+  data: Record<string, unknown>,
+  key: string,
+  length?: number,
+): boolean[] => {
+  const value = data[key];
+  if (
+    !Array.isArray(value) ||
+    (length !== undefined && value.length !== length) ||
+    !value.every(
+      (entry: unknown): entry is boolean => typeof entry === "boolean",
+    )
+  )
+    throw new Error(`日麻快照布林陣列欄位錯誤：${key}`);
+  return [...value];
+};
+
+const nullableIntegerArrayAt = (
+  data: Record<string, unknown>,
+  key: string,
+  length?: number,
+): number[] | null => {
+  if (data[key] === null) return null;
+  return integerArrayAt(data, key, length);
+};
+
+const parseResult = (value: unknown): RiichiResult | null => {
+  if (value === null) return null;
+  const result = recordOf(value);
+  if (typeof result.type !== "string")
+    throw new Error("日麻快照 result 格式錯誤");
+  return structuredClone(result) as RiichiResult;
+};
+
+const parsePaipu = (value: unknown): Record<string, unknown> | null => {
+  if (value === null) return null;
+  const paipu = recordOf(value);
+  if (
+    !Array.isArray(paipu.log) ||
+    !paipu.log.every(
+      (round: unknown) =>
+        Array.isArray(round) &&
+        round.every(
+          (entry: unknown) =>
+            typeof entry === "object" &&
+            entry !== null &&
+            !Array.isArray(entry),
+        ),
+    )
+  )
+    throw new Error("日麻快照 paipu 格式錯誤");
+  return structuredClone(paipu);
+};
+
+const parseSnapshotArray = (value: unknown): string[][] => {
+  if (
+    !Array.isArray(value) ||
+    value.length !== 4 ||
+    !value.every(
+      (entry: unknown) =>
+        Array.isArray(entry) &&
+        entry.every(
+          (piece: unknown): piece is string => typeof piece === "string",
+        ),
+    )
+  )
+    throw new Error("日麻快照牌河格式錯誤");
+  return value.map((entry) => [...entry]);
+};
+
+const parseShanSnapshot = (value: unknown): RiichiShanSnapshot | null => {
+  if (value === null) return null;
+  const shan = recordOf(value);
+  const fubaopai =
+    shan.fubaopai === null ? null : stringArrayAt(shan, "fubaopai");
+  return {
+    pai: stringArrayAt(shan, "pai"),
+    baopai: stringArrayAt(shan, "baopai"),
+    fubaopai,
+    weikaigang: booleanAt(shan, "weikaigang"),
+    closed: booleanAt(shan, "closed"),
+  };
+};
+
+const parseSnapshotModel = (value: unknown): RiichiModelSnapshot => {
+  const model = recordOf(value);
+  const board = recordOf(model.board);
+  return {
+    title: stringAt(model, "title"),
+    player: stringArrayAt(model, "player", 4),
+    qijia: integerAt(model, "qijia", 0),
+    zhuangfeng: integerAt(model, "zhuangfeng", 0),
+    jushu: integerAt(model, "jushu", 0),
+    changbang: integerAt(model, "changbang", 0),
+    lizhibang: integerAt(model, "lizhibang", 0),
+    defen: integerArrayAt(model, "defen", 4),
+    shan: parseShanSnapshot(model.shan),
+    shoupai: stringArrayAt(model, "shoupai", 4),
+    he: parseSnapshotArray(model.he),
+    playerId: integerArrayAt(model, "playerId", 4),
+    lunban: integerAt(model, "lunban"),
+    board: {
+      lizhi: booleanAt(board, "lizhi"),
+      fenpei: nullableIntegerArrayAt(board, "fenpei", 4),
+      lianzhuang: booleanAt(board, "lianzhuang"),
+      changbang: integerAt(board, "changbang", 0),
+      lizhibang: integerAt(board, "lizhibang", 0),
+    },
+  };
+};
+
+const parseSnapshotEngine = (value: unknown): RiichiEngineSnapshot => {
+  const engine = recordOf(value);
+  const replies = engine.reply;
+  if (
+    !Array.isArray(replies) ||
+    replies.length !== 4 ||
+    !replies.every(
+      (reply: unknown) =>
+        reply === null || (typeof reply === "object" && !Array.isArray(reply)),
+    )
+  )
+    throw new Error("日麻快照回覆格式錯誤");
+  return {
+    status: nullableStringAt(engine, "status"),
+    reply: replies.map((reply) =>
+      reply === null ? null : (structuredClone(reply) as MajiangReply),
+    ),
+    paipu: parsePaipu(engine.paipu),
+    diyizimo: booleanAt(engine, "diyizimo"),
+    fengpai: booleanAt(engine, "fengpai"),
+    dapai: nullableStringAt(engine, "dapai"),
+    gang: nullableStringAt(engine, "gang"),
+    lizhi: integerArrayAt(engine, "lizhi", 4),
+    yifa: integerArrayAt(engine, "yifa", 4),
+    nGang: integerArrayAt(engine, "nGang", 4),
+    nengRong: booleanArrayAt(engine, "nengRong", 4),
+    hule: integerArrayAt(engine, "hule"),
+    huleOption: nullableStringAt(engine, "huleOption"),
+    noGame: booleanAt(engine, "noGame"),
+    lianzhuang: booleanAt(engine, "lianzhuang"),
+    changbang: integerAt(engine, "changbang", 0),
+    fenpei: nullableIntegerArrayAt(engine, "fenpei", 4),
+    maxJushu: integerAt(engine, "maxJushu", 0),
+    activeType: nullableStringAt(engine, "activeType"),
+  };
+};
+
+export function parseRiichiSessionSnapshot(
+  value: unknown,
+): RiichiSessionSnapshot {
+  const snapshot = recordOf(value);
+  if (snapshot.version !== 1) throw new Error("不支援的日麻快照版本");
+  const humans = integerArrayAt(snapshot, "humans");
+  if (
+    humans.some((id) => id < 0 || id > 3) ||
+    new Set(humans).size !== humans.length
+  )
+    throw new Error("日麻快照真人座位格式錯誤");
+  const rounds = integerAt(snapshot, "rounds", 0);
+  if (![0, 1, 2].includes(rounds)) throw new Error("日麻快照場數格式錯誤");
+  return {
+    version: 1,
+    humans,
+    rounds,
+    names: stringArrayAt(snapshot, "names", 4),
+    revision: integerAt(snapshot, "revision", 0),
+    started: booleanAt(snapshot, "started"),
+    paused: booleanAt(snapshot, "paused"),
+    done: booleanAt(snapshot, "done"),
+    result: parseResult(snapshot.result),
+    history: (() => {
+      if (!Array.isArray(snapshot.history))
+        throw new Error("日麻快照歷史格式錯誤");
+      return snapshot.history.map((entry) => ({
+        label: stringAt(recordOf(entry), "label"),
+      }));
+    })(),
+    model: parseSnapshotModel(snapshot.model),
+    engine: parseSnapshotEngine(snapshot.engine),
+  };
+}
 
 const windName = (wind: number): string => WINDS[wind] ?? "";
 
@@ -283,6 +599,69 @@ export function riichiChoices(
   return out;
 }
 
+const restoreShan = (
+  game: RiichiCoreGame,
+  snapshot: RiichiShanSnapshot,
+): NonNullable<RiichiModel["shan"]> => {
+  const shan = new Majiang.Shan(game._rule);
+  Object.assign(shan as unknown as Record<string, unknown>, {
+    _pai: [...snapshot.pai],
+    _baopai: [...snapshot.baopai],
+    _fubaopai: snapshot.fubaopai ? [...snapshot.fubaopai] : null,
+    _weikaigang: snapshot.weikaigang,
+    _closed: snapshot.closed,
+  });
+  return shan;
+};
+
+const restoreRiver = (pais: string[]): MajiangModel["he"][number] => {
+  const river = new Majiang.He();
+  const find: Record<string, boolean> = {};
+  for (const pai of pais) {
+    const normalized = pai.replace(/[+=-]$/, "");
+    const suit = normalized[0];
+    const number = normalized[1];
+    if (!suit || !number) throw new Error("日麻快照牌河資料錯誤");
+    find[suit + String(Number(number) || 5)] = true;
+  }
+  Object.assign(river as unknown as Record<string, unknown>, {
+    _pai: [...pais],
+    _find: find,
+  });
+  return river;
+};
+
+const playerWind = (id: number, qijia: number, jushu: number): number =>
+  (id - qijia - jushu + 8) % 4;
+
+const replayMessage = (
+  type: string,
+  data: Record<string, unknown>,
+  id: number,
+  qijia: number,
+  jushu: number,
+): MajiangMessage => {
+  const replayed = structuredClone(data);
+  if (type === "qipai") {
+    const qipai = replayed;
+    const hands = stringArrayAt(qipai, "shoupai", 4);
+    const wind = playerWind(id, qijia, integerAt(qipai, "jushu", 0));
+    return {
+      qipai: {
+        ...qipai,
+        shoupai: hands.map((hand, index) => (index === wind ? hand : "")),
+      },
+    };
+  }
+  if (type === "zimo" || type === "gangzimo") {
+    const zimo = replayed;
+    const wind = integerAt(zimo, "l", 0);
+    if (wind !== playerWind(id, qijia, jushu)) zimo.p = "";
+    return { [type]: zimo };
+  }
+  return { [type]: replayed };
+};
+
 export class RiichiSession {
   readonly humans: Set<number>;
   readonly onChange: () => void;
@@ -294,6 +673,7 @@ export class RiichiSession {
   readonly queue: Array<() => void>;
   readonly history: RiichiHistoryEntry[];
   game: RiichiCoreGame;
+  activeType: string | null;
   revision: number;
   result: RiichiResult | null;
   done: boolean;
@@ -322,6 +702,7 @@ export class RiichiSession {
     this.queue = [];
     this.revision = 0;
     this.history = [];
+    this.activeType = null;
     this.result = null;
     this.done = false;
     this.closed = false;
@@ -375,6 +756,7 @@ export class RiichiSession {
     this.game.call_players = (type, messages) => {
       if (this.closed) return;
       this.revision++;
+      this.activeType = type;
       this.game._status = type;
       this.game._reply = [];
       const firstMessage = messages[0];
@@ -398,6 +780,264 @@ export class RiichiSession {
           this.game.jieju();
         });
       };
+  }
+
+  static fromSnapshot(
+    value: unknown,
+    options: Omit<RiichiSessionOptions, "humans" | "rounds" | "names"> = {},
+  ): RiichiSession {
+    const snapshot = parseRiichiSessionSnapshot(value);
+    const session = new RiichiSession({
+      ...options,
+      humans: snapshot.humans,
+      rounds: snapshot.rounds,
+      names: snapshot.names,
+    });
+    session.restore(snapshot);
+    return session;
+  }
+
+  snapshot(): RiichiSessionSnapshot {
+    if (!this.started) throw new Error("日麻尚未開始，沒有可保存的對局快照");
+    if (this.queue.length)
+      throw new Error("日麻快照不可在引擎佇列未清空時建立");
+    const model = this.game.model;
+    const shan = model.shan;
+    const game = this.game;
+    const modelRecord = model as unknown as Record<string, unknown>;
+    return {
+      version: 1,
+      humans: [...this.humans],
+      rounds: this.rounds,
+      names: [...model.player],
+      revision: this.revision,
+      started: this.started,
+      paused: this.paused,
+      done: this.done,
+      result: this.result ? structuredClone(this.result) : null,
+      history: structuredClone(this.history),
+      model: {
+        title: model.title,
+        player: [...model.player],
+        qijia: model.qijia,
+        zhuangfeng: model.zhuangfeng,
+        jushu: model.jushu,
+        changbang: model.changbang,
+        lizhibang: model.lizhibang,
+        defen: [...model.defen],
+        shan: shan
+          ? {
+              pai: [...shan._pai],
+              baopai: [...shan._baopai],
+              fubaopai: shan._fubaopai ? [...shan._fubaopai] : null,
+              weikaigang: shan._weikaigang,
+              closed: shan._closed,
+            }
+          : null,
+        shoupai: model.shoupai.map((hand) => hand.toString()),
+        he: model.he.map((river) => [...river._pai]),
+        playerId: [...model.player_id],
+        lunban: model.lunban,
+        board: {
+          lizhi: Boolean(modelRecord._lizhi),
+          fenpei: Array.isArray(modelRecord._fenpei)
+            ? [...(modelRecord._fenpei as number[])]
+            : null,
+          lianzhuang: Boolean(modelRecord._lianzhuang),
+          changbang:
+            typeof modelRecord._changbang === "number"
+              ? modelRecord._changbang
+              : model.changbang,
+          lizhibang:
+            typeof modelRecord._lizhibang === "number"
+              ? modelRecord._lizhibang
+              : model.lizhibang,
+        },
+      },
+      engine: {
+        status: typeof game._status === "string" ? game._status : null,
+        reply: game._reply.map((reply) =>
+          reply === undefined ? null : structuredClone(reply),
+        ),
+        paipu:
+          game._paipu && typeof game._paipu === "object"
+            ? (structuredClone(game._paipu) as Record<string, unknown>)
+            : null,
+        diyizimo: game._diyizimo,
+        fengpai: game._fengpai,
+        dapai: game._dapai,
+        gang: game._gang,
+        lizhi: [...game._lizhi],
+        yifa: [...game._yifa],
+        nGang: [...game._n_gang],
+        nengRong: game._neng_rong.map(Boolean),
+        hule: [...game._hule],
+        huleOption: game._hule_option,
+        noGame: game._no_game,
+        lianzhuang: game._lianzhuang,
+        changbang: game._changbang,
+        fenpei: game._fenpei ? [...game._fenpei] : null,
+        maxJushu: game._max_jushu,
+        activeType: this.activeType,
+      },
+    };
+  }
+
+  restore(value: unknown): void {
+    if (this.started || this.revision)
+      throw new Error("只能在新的日麻 session 上還原快照");
+    const snapshot = parseRiichiSessionSnapshot(value);
+    if (!snapshot.started)
+      throw new Error("日麻快照尚未開始，無法還原進行中的 session");
+    if (snapshot.humans.some((id) => !this.humans.has(id)))
+      throw new Error("日麻快照真人座位與 session 設定不一致");
+    if (this.rounds !== snapshot.rounds)
+      throw new Error("日麻快照場數與 session 設定不一致");
+    if (this.queue.length) this.queue.length = 0;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    this.pending.clear();
+
+    const model = this.game.model as unknown as Record<string, unknown>;
+    const restoredModel = snapshot.model;
+    Object.assign(model, {
+      title: restoredModel.title,
+      player: [...restoredModel.player],
+      qijia: restoredModel.qijia,
+      zhuangfeng: restoredModel.zhuangfeng,
+      jushu: restoredModel.jushu,
+      changbang: restoredModel.changbang,
+      lizhibang: restoredModel.lizhibang,
+      defen: [...restoredModel.defen],
+      shan: restoredModel.shan
+        ? restoreShan(this.game, restoredModel.shan)
+        : null,
+      shoupai: restoredModel.shoupai.map((paistr) =>
+        Majiang.Shoupai.fromString(paistr),
+      ),
+      he: restoredModel.he.map((river) => restoreRiver(river)),
+      player_id: [...restoredModel.playerId],
+      lunban: restoredModel.lunban,
+      _lizhi: restoredModel.board.lizhi,
+      _fenpei: restoredModel.board.fenpei
+        ? [...restoredModel.board.fenpei]
+        : null,
+      _lianzhuang: restoredModel.board.lianzhuang,
+      _changbang: restoredModel.board.changbang,
+      _lizhibang: restoredModel.board.lizhibang,
+    });
+
+    const engine = snapshot.engine;
+    Object.assign(this.game as unknown as Record<string, unknown>, {
+      _paipu: engine.paipu ? structuredClone(engine.paipu) : null,
+      _status: engine.status ?? "",
+      _reply: engine.reply.map((reply) =>
+        reply === null ? undefined : structuredClone(reply),
+      ),
+      _diyizimo: engine.diyizimo,
+      _fengpai: engine.fengpai,
+      _dapai: engine.dapai,
+      _gang: engine.gang,
+      _lizhi: [...engine.lizhi],
+      _yifa: [...engine.yifa],
+      _n_gang: [...engine.nGang],
+      _neng_rong: [...engine.nengRong],
+      _hule: [...engine.hule],
+      _hule_option: engine.huleOption,
+      _no_game: engine.noGame,
+      _lianzhuang: engine.lianzhuang,
+      _changbang: engine.changbang,
+      _fenpei: engine.fenpei ? [...engine.fenpei] : null,
+      _max_jushu: engine.maxJushu,
+      _timeout_id: undefined,
+    });
+    this.game._sync = true;
+    this.activeType = engine.activeType;
+    this.revision = snapshot.revision;
+    this.result = snapshot.result ? structuredClone(snapshot.result) : null;
+    this.history.splice(
+      0,
+      this.history.length,
+      ...structuredClone(snapshot.history),
+    );
+    this.done = snapshot.done;
+    this.closed = false;
+    this.paused = snapshot.paused;
+    this.started = true;
+    this.rebuildBotState(snapshot);
+    this.restorePending();
+    this.schedule();
+  }
+
+  private rebuildBotState(snapshot: RiichiSessionSnapshot): void {
+    const paipu = snapshot.engine.paipu;
+    if (!paipu) return;
+    const qijia = integerAt(paipu, "qijia", 0);
+    const title = stringAt(paipu, "title");
+    const player = stringArrayAt(paipu, "player", 4);
+    const players = this.game._players;
+    for (const id of players.keys()) {
+      if (this.humans.has(id)) continue;
+      const current = players[id];
+      if (!current) continue;
+      current.action(
+        {
+          kaiju: {
+            id,
+            rule: structuredClone(this.game._rule),
+            title,
+            player: [...player],
+            qijia,
+          },
+        },
+        () => {},
+      );
+    }
+    const log = paipu.log;
+    if (!Array.isArray(log)) throw new Error("日麻快照牌譜格式錯誤");
+    const events: unknown[] = [];
+    for (const round of log as unknown[]) {
+      if (!Array.isArray(round)) throw new Error("日麻快照牌譜格式錯誤");
+      events.push(...(round as unknown[]));
+    }
+    let jushu = 0;
+    for (const entryValue of events) {
+      const entry = recordOf(entryValue);
+      const type = Object.keys(entry)[0];
+      if (!type) throw new Error("日麻快照牌譜事件格式錯誤");
+      const data = recordOf(entry[type]);
+      if (type === "qipai") jushu = integerAt(data, "jushu", 0);
+      for (const id of players.keys()) {
+        if (this.humans.has(id)) continue;
+        const current = players[id];
+        if (!current) continue;
+        current.action(replayMessage(type, data, id, qijia, jushu), () => {});
+      }
+    }
+    if (snapshot.done)
+      for (const id of players.keys()) {
+        if (!this.humans.has(id)) {
+          players[id]?.action({ jieju: paipu }, () => {});
+        }
+      }
+  }
+
+  private restorePending(): void {
+    const type = this.activeType;
+    if (!type || this.done) return;
+    for (const id of this.humans) {
+      const choices = riichiChoices(this.game, id, type);
+      if (!choices.length) continue;
+      this.pending.set(id, {
+        callback: (reply) => {
+          this.game.reply(id, reply);
+        },
+        choices: choices.map((current, index) => ({
+          ...current,
+          id: `${String(this.revision)}:${String(id)}:${String(index)}`,
+        })),
+      });
+    }
   }
 
   start(): void {

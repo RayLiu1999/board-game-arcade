@@ -11,14 +11,20 @@ declare module "@kobalab/majiang-core" {
   }
 
   export interface MajiangShan {
+    readonly _pai: string[];
     readonly _baopai: string[];
+    readonly _fubaopai: string[] | null;
+    readonly _weikaigang: boolean;
+    readonly _closed: boolean;
     readonly baopai: string[];
     readonly paishu: number;
   }
 
   export interface MajiangModel {
-    readonly player_id: number[];
+    title: string;
     player: string[];
+    qijia: number;
+    readonly player_id: number[];
     readonly defen: number[];
     readonly shan: MajiangShan | null;
     readonly shoupai: MajiangShoupai[];
@@ -28,6 +34,11 @@ declare module "@kobalab/majiang-core" {
     readonly jushu: number;
     readonly changbang: number;
     readonly lizhibang: number;
+    readonly _lizhi?: boolean;
+    readonly _fenpei?: number[] | null;
+    readonly _lianzhuang?: boolean;
+    readonly _changbang?: number;
+    readonly _lizhibang?: number;
   }
 
   export interface MajiangReply {
@@ -48,14 +59,28 @@ declare module "@kobalab/majiang-core" {
   }
 
   export interface MajiangGame {
+    readonly _players: MajiangPlayer[];
+    readonly _rule: MajiangRule;
+    _paipu: unknown;
     readonly model: MajiangModel;
     _sync: boolean;
     _status: string;
     _reply: Array<MajiangReply | undefined>;
     _diyizimo: boolean;
+    _fengpai: boolean;
     _dapai: string | null;
     _neng_rong: boolean[];
     _gang: string | null;
+    _lizhi: number[];
+    _yifa: number[];
+    _n_gang: number[];
+    _hule: number[];
+    _hule_option: string | null;
+    _no_game: boolean;
+    _lianzhuang: boolean;
+    _changbang: number;
+    _fenpei: number[] | null;
+    _max_jushu: number;
     last?: () => void;
     delay(callback: () => void, timeout?: number): void;
     call_players(type: string, messages: MajiangMessage[]): void;
@@ -85,6 +110,11 @@ declare module "@kobalab/majiang-core" {
       title: string,
     ) => MajiangGame;
     rule(options: Record<string, number>): MajiangRule;
+    Shan: new (rule: MajiangRule) => MajiangShan;
+    He: new () => MajiangHe;
+    Shoupai: {
+      fromString(value: string): MajiangShoupai;
+    };
   }
 
   const Majiang: MajiangNamespace;
