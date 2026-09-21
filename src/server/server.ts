@@ -5,6 +5,7 @@ import type { Server } from "node:http";
 import { createStaticHttpServer, parsePort } from "./http-server.js";
 import { RoomManager } from "./room-manager.js";
 import type { RoomStore } from "./room-store.js";
+import { createConfiguredRoomStore } from "./room-store-factory.js";
 import { attachWebSocketServer } from "./websocket-server.js";
 
 export interface ServerOptions {
@@ -30,7 +31,9 @@ export function createServer(options: ServerOptions = {}): ServerBundle {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = parsePort(process.env.PORT);
-  const { server, ready } = createServer();
+  const { server, ready } = createServer({
+    roomStore: createConfiguredRoomStore(),
+  });
   void ready
     .then(() => {
       server.listen(port, "0.0.0.0", () => {
