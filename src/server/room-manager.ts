@@ -53,6 +53,8 @@ export class RoomManager {
   private readonly sendMessage: SendMessage;
   private readonly store: RoomStore;
   private readonly now: () => number;
+  private readonly roomLocks = new Map<string, Promise<void>>();
+  private entryLock: Promise<void> = Promise.resolve();
 
   constructor(options: RoomManagerOptions = {}) {
     this.sendMessage = options.sendMessage ?? send;
@@ -99,6 +101,41 @@ export class RoomManager {
     const snapshot = this.snapshot(room);
     if (!snapshot) return;
     room.revision = await this.store.update(snapshot, room.revision);
+  }
+
+  async runExclusive<Value>(
+    code: string,
+    operation: () => Promise<Value>,
+  ): Promise<Value> {
+    const previous = this.roomLocks.get(code) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.roomLocks.set(code, current);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.roomLocks.get(code) === current) this.roomLocks.delete(code);
+    }
+  }
+
+  private async runEntry<Value>(
+    operation: () => Promise<Value>,
+  ): Promise<Value> {
+    const previous = this.entryLock;
+    let release!: () => void;
+    this.entryLock = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
   }
 
   private async createPersistentRoom(room: Room): Promise<void> {
@@ -170,21 +207,24 @@ export class RoomManager {
   }
 
   async detach(socket: ClientSocket): Promise<void> {
-    if (!socket.room) return;
-    const room = this.rooms.get(socket.room);
-    if (!room) {
+    const code = socket.room;
+    if (!code) return;
+    await this.runExclusive(code, async () => {
+      const room = this.rooms.get(code);
+      if (!room) {
+        socket.room = null;
+        return;
+      }
+      const player = room.players.find((entry) => entry?.socket === socket);
+      if (player) {
+        player.socket = null;
+        room.session?.pause(true);
+        this.touch(room);
+        await this.persist(room);
+        this.broadcast(room);
+      }
       socket.room = null;
-      return;
-    }
-    const player = room.players.find((entry) => entry?.socket === socket);
-    if (player) {
-      player.socket = null;
-      room.session?.pause(true);
-      this.touch(room);
-      await this.persist(room);
-      this.broadcast(room);
-    }
-    socket.room = null;
+    });
   }
 
   async handleEntry(
@@ -192,6 +232,13 @@ export class RoomManager {
     message: Extract<ClientMessage, { type: "create" | "join" }>,
   ): Promise<void> {
     await this.ready;
+    await this.runEntry(() => this.handleEntryUnsafe(socket, message));
+  }
+
+  private async handleEntryUnsafe(
+    socket: ClientSocket,
+    message: Extract<ClientMessage, { type: "create" | "join" }>,
+  ): Promise<void> {
     if (socket.room) throw new Error("請先離開目前房間");
     let room: Room;
     let index: number;
@@ -271,15 +318,19 @@ export class RoomManager {
   }
 
   async pruneInactive(now = this.now()): Promise<void> {
-    for (const [code, room] of this.rooms) {
-      if (
-        !room.players.some((player) => Boolean(player?.socket)) &&
-        now >= room.expiresAt
-      ) {
-        room.session?.close();
-        this.rooms.delete(code);
-        await this.store.delete(code);
-      }
+    for (const [code] of this.rooms) {
+      await this.runExclusive(code, async () => {
+        const room = this.rooms.get(code);
+        if (
+          room &&
+          !room.players.some((player) => Boolean(player?.socket)) &&
+          now >= room.expiresAt
+        ) {
+          room.session?.close();
+          this.rooms.delete(code);
+          await this.store.delete(code);
+        }
+      });
     }
   }
 

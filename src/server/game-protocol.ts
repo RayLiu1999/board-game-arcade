@@ -20,7 +20,6 @@ export async function handleClientMessage(
   message: ClientMessage,
   roomManager: RoomManager,
 ): Promise<void> {
-  const { rooms } = roomManager;
   if (message.type === "create" || message.type === "join") {
     await roomManager.handleEntry(socket, message);
     return;
@@ -31,6 +30,18 @@ export async function handleClientMessage(
     return;
   }
 
+  if (!socket.room) throw new Error("尚未加入房間");
+  await roomManager.runExclusive(socket.room, () =>
+    handleRoomMessage(socket, message, roomManager),
+  );
+}
+
+async function handleRoomMessage(
+  socket: ClientSocket,
+  message: ClientMessage,
+  roomManager: RoomManager,
+): Promise<void> {
+  const { rooms } = roomManager;
   if (!socket.room) throw new Error("尚未加入房間");
   const room = rooms.get(socket.room);
   if (!room) throw new Error("尚未加入房間");
