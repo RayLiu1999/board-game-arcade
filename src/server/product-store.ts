@@ -3,6 +3,12 @@ import { isDeepStrictEqual } from "node:util";
 
 import type { GameId } from "../shared/protocol.js";
 import { hashSessionToken, matchesSessionToken } from "./product-security.js";
+import {
+  calculateElo,
+  INITIAL_RATING,
+  RATING_VERSION,
+  type RatingResult,
+} from "./rating.js";
 
 export const PRODUCT_SCHEMA_VERSION = 1;
 export const MATCH_EVENT_SCHEMA_VERSION = 1;
@@ -176,6 +182,36 @@ export interface UserMatchStats {
   readonly byGame: readonly UserMatchStatsByGame[];
 }
 
+export interface RatingRecord {
+  readonly userId: string;
+  readonly game: GameId;
+  readonly rating: number;
+  readonly gamesPlayed: number;
+  readonly wins: number;
+  readonly losses: number;
+  readonly draws: number;
+  readonly provisional: boolean;
+  readonly ratingVersion: number;
+  readonly updatedAt: number;
+}
+
+export interface RatingChange {
+  readonly matchId: string;
+  readonly userId: string;
+  readonly game: GameId;
+  readonly seat: number;
+  readonly result: RatingResult;
+  readonly ratingBefore: number;
+  readonly ratingAfter: number;
+  readonly ratingDelta: number;
+  readonly gamesBefore: number;
+  readonly gamesAfter: number;
+  readonly kFactor: number;
+  readonly provisional: boolean;
+  readonly ratingVersion: number;
+  readonly createdAt: number;
+}
+
 export interface CompleteMatchInput {
   readonly matchId: string;
   readonly outcome: MatchOutcome;
@@ -255,6 +291,8 @@ export interface MatchStore {
   listMatchEvents(matchId: string): Promise<MatchEvent[]>;
   listMatchesForUser(input: ListMatchHistoryInput): Promise<MatchHistoryPage>;
   getUserMatchStats(userId: string): Promise<UserMatchStats>;
+  getUserRating(userId: string, game: GameId): Promise<RatingRecord>;
+  getUserRatings(userId: string): Promise<readonly RatingRecord[]>;
   completeMatch(input: CompleteMatchInput): Promise<MatchRecord>;
   abortMatch(input: AbortMatchInput): Promise<MatchRecord>;
 }
@@ -312,6 +350,23 @@ export const defaultUserPreferences = (
   historyPublic: false,
   friendInvites: true,
   showOnlineStatus: true,
+  updatedAt,
+});
+
+export const defaultUserRating = (
+  userId: string,
+  game: GameId,
+  updatedAt = Date.now(),
+): RatingRecord => ({
+  userId,
+  game,
+  rating: INITIAL_RATING,
+  gamesPlayed: 0,
+  wins: 0,
+  losses: 0,
+  draws: 0,
+  provisional: true,
+  ratingVersion: RATING_VERSION,
   updatedAt,
 });
 
@@ -390,6 +445,39 @@ const resultForSeat = (
   return outcome.winnerSeat === seat ? "win" : "loss";
 };
 
+const ratedParticipants = (
+  match: MatchRecord,
+  outcome: MatchOutcome,
+  explicit: CompleteMatchInput["participantResults"],
+): Array<{ participant: MatchParticipant; result: RatingResult }> => {
+  if (match.game === "riichi" || match.participants.length !== 2)
+    throw new ProductStoreConflictError("rated 對局必須由兩名真人玩家完成");
+  if (
+    outcome.winnerSeat !== null &&
+    !match.participants.some(
+      (participant) => participant.seat === outcome.winnerSeat,
+    )
+  )
+    throw new ProductStoreConflictError("rated 對局結果缺少勝者座位");
+  const userIds = new Set<string>();
+  return match.participants.map((participant) => {
+    const userId = participant.userId;
+    if (participant.bot || userId === null)
+      throw new ProductStoreConflictError("rated 對局需要綁定真人身份");
+    if (userIds.has(userId))
+      throw new ProductStoreConflictError("rated 對局不能由同一玩家佔用兩席");
+    userIds.add(userId);
+    const result = resultForSeat(outcome, participant.seat);
+    if (result === "unknown") throw new Error("rated 對局結果格式錯誤");
+    const requested = explicit?.find(
+      (entry) => entry.seat === participant.seat,
+    );
+    if (requested && requested.result !== result)
+      throw new ProductStoreConflictError("rated 對局結果不可由呼叫端修改");
+    return { participant, result };
+  });
+};
+
 const applyParticipantResults = (
   participants: readonly MatchParticipant[],
   outcome: MatchOutcome,
@@ -414,6 +502,7 @@ export class MemoryProductStore implements ProductStore {
   private readonly preferences = new Map<string, UserPreferences>();
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly matches = new Map<string, MatchRecord>();
+  private readonly ratings = new Map<string, RatingRecord>();
   private readonly events = new Map<string, Map<number, MatchEvent>>();
   private readonly audits: AuditRecord[] = [];
 
@@ -806,6 +895,28 @@ export class MemoryProductStore implements ProductStore {
     });
   }
 
+  getUserRating(userId: string, game: GameId): Promise<RatingRecord> {
+    return Promise.resolve().then(() => {
+      const user = this.users.get(userId);
+      if (!user) throw new ProductStoreNotFoundError(`找不到使用者：${userId}`);
+      return clone(
+        this.ratings.get(`${userId}:${game}`) ??
+          defaultUserRating(user.id, game),
+      );
+    });
+  }
+
+  getUserRatings(userId: string): Promise<readonly RatingRecord[]> {
+    return Promise.resolve().then(() => {
+      if (!this.users.has(userId))
+        throw new ProductStoreNotFoundError(`找不到使用者：${userId}`);
+      return [...this.ratings.values()]
+        .filter((rating) => rating.userId === userId)
+        .sort((left, right) => left.game.localeCompare(right.game))
+        .map(clone);
+    });
+  }
+
   completeMatch(input: CompleteMatchInput): Promise<MatchRecord> {
     return Promise.resolve().then(() => {
       const match = this.matches.get(input.matchId);
@@ -822,11 +933,64 @@ export class MemoryProductStore implements ProductStore {
         throw new ProductStoreConflictError(
           `對局目前不可結算：${input.matchId}`,
         );
+      const rated =
+        match.mode === "rated"
+          ? ratedParticipants(match, input.outcome, input.participantResults)
+          : null;
+      const completedAt = timestamp(input.completedAt);
+      const ratingUpdates = rated?.map(({ participant, result }) => {
+        if (!participant.userId || !this.users.has(participant.userId))
+          throw new ProductStoreNotFoundError(
+            `找不到 rated 玩家：${participant.userId ?? ""}`,
+          );
+        const current =
+          this.ratings.get(`${participant.userId}:${match.game}`) ??
+          defaultUserRating(participant.userId, match.game, completedAt);
+        if (current.ratingVersion !== RATING_VERSION)
+          throw new ProductStoreConflictError("評分版本不相容");
+        return { participant, result, current };
+      });
+      if (ratingUpdates) {
+        const first = ratingUpdates[0];
+        const second = ratingUpdates[1];
+        if (!first || !second) throw new Error("rated 對局玩家資料不足");
+        const firstCalculation = calculateElo({
+          rating: first.current.rating,
+          opponentRating: second.current.rating,
+          gamesPlayed: first.current.gamesPlayed,
+          result: first.result,
+        });
+        const secondCalculation = calculateElo({
+          rating: second.current.rating,
+          opponentRating: first.current.rating,
+          gamesPlayed: second.current.gamesPlayed,
+          result: second.result,
+        });
+        for (const [entry, calculation] of [
+          [first, firstCalculation],
+          [second, secondCalculation],
+        ] as const) {
+          const { current, participant, result } = entry;
+          const updated: RatingRecord = {
+            ...current,
+            rating: calculation.ratingAfter,
+            gamesPlayed: calculation.gamesAfter,
+            wins: current.wins + (result === "win" ? 1 : 0),
+            losses: current.losses + (result === "loss" ? 1 : 0),
+            draws: current.draws + (result === "draw" ? 1 : 0),
+            provisional: calculation.provisional,
+            updatedAt: completedAt,
+          };
+          const userId = participant.userId;
+          if (!userId) throw new Error("rated 玩家身份遺失");
+          this.ratings.set(`${userId}:${match.game}`, updated);
+        }
+      }
       const outcome = clone(input.outcome);
       const updated: MatchRecord = {
         ...match,
         status: "completed",
-        completedAt: timestamp(input.completedAt),
+        completedAt,
         outcome,
         participants: applyParticipantResults(
           match.participants,

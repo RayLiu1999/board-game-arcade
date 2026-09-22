@@ -49,11 +49,19 @@ register("protocol parser normalizes supported room and game commands", () => {
     parseClientMessage({
       type: "create",
       game: "go",
+      mode: "rated",
       size: 13,
       name: "甲",
       rounds: 0,
     }),
-    { type: "create", game: "go", size: 13, name: "甲", rounds: 0 },
+    {
+      type: "create",
+      game: "go",
+      mode: "rated",
+      size: 13,
+      name: "甲",
+      rounds: 0,
+    },
   );
   assert.deepEqual(
     parseClientMessage({ type: "join", code: "ABC123", token: "secret" }),
@@ -82,6 +90,7 @@ register("protocol parser rejects invalid messages at the boundary", () => {
   rejectsMessage(null);
   rejectsMessage({});
   rejectsMessage({ type: "create", game: "mahjong" });
+  rejectsMessage({ type: "create", game: "go", mode: "ranked" });
   rejectsMessage({ type: "create", game: "go", rounds: "0" });
   rejectsMessage({ type: "join", code: 123 });
   rejectsMessage({ type: "move", ply: 0, move: { to: "40" } });

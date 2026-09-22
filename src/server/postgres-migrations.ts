@@ -32,6 +32,8 @@ export const refreshDatabase = async (pool: Pool): Promise<void> => {
     await client.query("BEGIN");
     await client.query(`
       DROP TABLE IF EXISTS
+        qiju_rating_results,
+        qiju_ratings,
         qiju_user_preferences,
         qiju_match_events,
         qiju_match_participants,

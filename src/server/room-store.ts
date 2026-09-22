@@ -1,5 +1,6 @@
 import type { BoardState, RiichiWaitingState } from "../shared/game-types.js";
 import type { RiichiSessionSnapshot } from "../../lib/riichi-session.js";
+import type { RoomMode } from "../shared/protocol.js";
 import type { RiichiSummary } from "./room-types.js";
 
 export const ROOM_TTL_MS = 30 * 60 * 1000;
@@ -13,6 +14,7 @@ export interface StoredRoomPlayer {
 
 export interface RoomSnapshot {
   code: string;
+  mode?: RoomMode;
   state: BoardState | RiichiSummary | RiichiWaitingState;
   players: Array<StoredRoomPlayer | null>;
   rounds: number;

@@ -194,6 +194,12 @@ void test("product HTTP supports guest profile, preferences, history, and stats"
     ],
   });
 
+  const ratings = await fetch(`${base}/api/me/ratings`, {
+    headers: { Cookie: cookie },
+  });
+  assert.equal(ratings.status, 200);
+  assert.deepEqual(await ratings.json(), { ratings: [] });
+
   const websocketUrl = base.replace("http:", "ws:");
   const authenticatedSocket = new WebSocket(websocketUrl, {
     headers: { Cookie: cookie },

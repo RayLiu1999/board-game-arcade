@@ -12,6 +12,7 @@ export const GAME_IDS = [
 export type GameId = (typeof GAME_IDS)[number];
 export type PlayerSide = 1 | -1;
 export type RiichiSeat = 0 | 1 | 2 | 3;
+export type RoomMode = "friend" | "rated";
 
 export const CHAT_MAX_LENGTH = 500;
 export const CHAT_HISTORY_LIMIT = 50;
@@ -41,6 +42,7 @@ export interface BoardMove {
 export interface CreateRoomMessage {
   readonly type: "create";
   readonly game: GameId;
+  readonly mode?: RoomMode;
   readonly size?: number;
   readonly name?: string;
   readonly rounds?: number;
@@ -110,6 +112,9 @@ const isOptionalInteger = (value: unknown): value is number | undefined =>
 const isOptionalString = (value: unknown): value is string | undefined =>
   value === undefined || typeof value === "string";
 
+const isOptionalRoomMode = (value: unknown): value is RoomMode | undefined =>
+  value === undefined || value === "friend" || value === "rated";
+
 const hasControlCharacter = (value: string): boolean =>
   Array.from(value).some((character) => {
     const codePoint = character.codePointAt(0) ?? 0;
@@ -148,13 +153,15 @@ export function parseClientMessage(value: unknown): ClientMessage {
     throw new Error("無效訊息");
 
   if (value.type === "create") {
-    if (!isGameId(value.game)) throw new Error("未知棋種");
+    if (!isGameId(value.game) || !isOptionalRoomMode(value.mode))
+      throw new Error("建立房間訊息格式錯誤");
     if (!isOptionalInteger(value.size) || !isOptionalString(value.name))
       throw new Error("建立房間訊息格式錯誤");
     if (!isOptionalInteger(value.rounds)) throw new Error("日麻場數格式錯誤");
     return {
       type: "create",
       game: value.game,
+      ...(value.mode === undefined ? {} : { mode: value.mode }),
       ...(value.size === undefined ? {} : { size: value.size }),
       ...(value.name === undefined ? {} : { name: value.name }),
       ...(value.rounds === undefined ? {} : { rounds: value.rounds }),

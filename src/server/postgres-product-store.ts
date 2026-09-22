@@ -3,6 +3,12 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import { isGameId, type GameId } from "../shared/protocol.js";
+import {
+  calculateElo,
+  INITIAL_RATING,
+  RATING_VERSION,
+  type RatingResult,
+} from "./rating.js";
 import { hashSessionToken } from "./product-security.js";
 import {
   MATCH_EVENT_SCHEMA_VERSION,
@@ -10,6 +16,7 @@ import {
   ProductStoreConflictError,
   ProductStoreNotFoundError,
   defaultUserPreferences,
+  defaultUserRating,
   mergeUserPreferences,
   type AbortMatchInput,
   type AddMatchParticipantInput,
@@ -29,6 +36,7 @@ import {
   type MatchStatus,
   type ParticipantResult,
   type ProductStore,
+  type RatingRecord,
   type RecordAuditInput,
   type SessionRecord,
   type UpdateUserPreferencesInput,
@@ -125,6 +133,19 @@ interface StatsRow {
 
 interface StatsByGameRow extends StatsRow {
   readonly game: string;
+}
+
+interface RatingRow {
+  readonly user_id: string;
+  readonly game: string;
+  readonly rating: number;
+  readonly games_played: number;
+  readonly wins: number;
+  readonly losses: number;
+  readonly draws: number;
+  readonly provisional: boolean;
+  readonly rating_version: number;
+  readonly updated_at: Date;
 }
 
 export interface PostgresProductStoreOptions {
@@ -248,6 +269,19 @@ const parsePreferences = (row: PreferenceRow): UserPreferences => ({
   updatedAt: requiredMillis(row.updated_at),
 });
 
+const parseRating = (row: RatingRow): RatingRecord => ({
+  userId: row.user_id,
+  game: validGame(row.game),
+  rating: row.rating,
+  gamesPlayed: row.games_played,
+  wins: row.wins,
+  losses: row.losses,
+  draws: row.draws,
+  provisional: row.provisional,
+  ratingVersion: row.rating_version,
+  updatedAt: requiredMillis(row.updated_at),
+});
+
 const parseParticipant = (row: ParticipantRow): MatchParticipant => ({
   matchId: row.match_id,
   seat: row.seat,
@@ -297,6 +331,48 @@ const parseAudit = (row: AuditRow): AuditRecord => ({
   metadata: parseJson(row.metadata_json),
   createdAt: requiredMillis(row.created_at),
 });
+
+const ratedResultForSeat = (
+  outcome: MatchOutcome,
+  seat: number,
+): RatingResult => {
+  if (outcome.winnerSeat === null) return "draw";
+  return outcome.winnerSeat === seat ? "win" : "loss";
+};
+
+const validateRatedParticipants = (
+  match: MatchRecord,
+  outcome: MatchOutcome,
+  explicit: CompleteMatchInput["participantResults"],
+): Array<{
+  participant: MatchRecord["participants"][number];
+  result: RatingResult;
+}> => {
+  if (match.game === "riichi" || match.participants.length !== 2)
+    throw new ProductStoreConflictError("rated 對局必須由兩名真人玩家完成");
+  if (
+    outcome.winnerSeat !== null &&
+    !match.participants.some(
+      (participant) => participant.seat === outcome.winnerSeat,
+    )
+  )
+    throw new ProductStoreConflictError("rated 對局結果缺少勝者座位");
+  const userIds = new Set<string>();
+  return match.participants.map((participant) => {
+    if (participant.bot || participant.userId === null)
+      throw new ProductStoreConflictError("rated 對局需要綁定真人身份");
+    if (userIds.has(participant.userId))
+      throw new ProductStoreConflictError("rated 對局不能由同一玩家佔用兩席");
+    userIds.add(participant.userId);
+    const result = ratedResultForSeat(outcome, participant.seat);
+    const requested = explicit?.find(
+      (entry) => entry.seat === participant.seat,
+    );
+    if (requested && requested.result !== result)
+      throw new ProductStoreConflictError("rated 對局結果不可由呼叫端修改");
+    return { participant, result };
+  });
+};
 
 type Queryable = Pick<PoolClient, "query">;
 
@@ -827,9 +903,41 @@ export class PostgresProductStore implements ProductStore {
     };
   }
 
+  async getUserRating(userId: string, game: GameId): Promise<RatingRecord> {
+    const user = await this.getUser(userId);
+    if (!user) throw new ProductStoreNotFoundError(`找不到使用者：${userId}`);
+    const result = await this.pool.query<RatingRow>(
+      `
+        SELECT user_id, game, rating, games_played, wins, losses, draws,
+               provisional, rating_version, updated_at
+        FROM qiju_ratings
+        WHERE user_id = $1 AND game = $2
+      `,
+      [userId, game],
+    );
+    const row = result.rows[0];
+    return row ? parseRating(row) : defaultUserRating(userId, game);
+  }
+
+  async getUserRatings(userId: string): Promise<readonly RatingRecord[]> {
+    const user = await this.getUser(userId);
+    if (!user) throw new ProductStoreNotFoundError(`找不到使用者：${userId}`);
+    const result = await this.pool.query<RatingRow>(
+      `
+        SELECT user_id, game, rating, games_played, wins, losses, draws,
+               provisional, rating_version, updated_at
+        FROM qiju_ratings
+        WHERE user_id = $1
+        ORDER BY game
+      `,
+      [userId],
+    );
+    return result.rows.map(parseRating);
+  }
+
   async completeMatch(input: CompleteMatchInput): Promise<MatchRecord> {
     return this.transaction(async (client) => {
-      const current = await this.loadMatch(client, input.matchId);
+      const current = await this.loadMatch(client, input.matchId, true);
       if (!current)
         throw new ProductStoreNotFoundError(`找不到對局：${input.matchId}`);
       if (current.status === "completed") {
@@ -843,22 +951,34 @@ export class PostgresProductStore implements ProductStore {
         throw new ProductStoreConflictError(
           `對局目前不可結算：${input.matchId}`,
         );
+      const completedAt = timestamp(input.completedAt);
+      const rated =
+        current.mode === "rated"
+          ? validateRatedParticipants(
+              current,
+              input.outcome,
+              input.participantResults,
+            )
+          : null;
+      if (rated)
+        await this.settleRatedMatch(client, current, rated, completedAt);
       await client.query(
         `
           UPDATE qiju_matches
           SET status = 'completed', completed_at = $2, outcome_json = $3::jsonb
           WHERE id = $1
         `,
-        [
-          input.matchId,
-          new Date(timestamp(input.completedAt)),
-          JSON.stringify(input.outcome),
-        ],
+        [input.matchId, new Date(completedAt), JSON.stringify(input.outcome)],
       );
       for (const participant of current.participants) {
-        const explicit = input.participantResults?.find(
-          (entry) => entry.seat === participant.seat,
-        );
+        const ratedResult = rated?.find(
+          (entry) => entry.participant.seat === participant.seat,
+        )?.result;
+        const explicit = ratedResult
+          ? undefined
+          : input.participantResults?.find(
+              (entry) => entry.seat === participant.seat,
+            );
         const result =
           explicit?.result ??
           (input.outcome.winnerSeat === null
@@ -883,7 +1003,7 @@ export class PostgresProductStore implements ProductStore {
 
   async abortMatch(input: AbortMatchInput): Promise<MatchRecord> {
     return this.transaction(async (client) => {
-      const current = await this.loadMatch(client, input.matchId);
+      const current = await this.loadMatch(client, input.matchId, true);
       if (!current)
         throw new ProductStoreNotFoundError(`找不到對局：${input.matchId}`);
       if (current.status === "aborted") return current;
@@ -935,9 +1055,159 @@ export class PostgresProductStore implements ProductStore {
     return parseAudit(row);
   }
 
+  private async settleRatedMatch(
+    client: PoolClient,
+    match: MatchRecord,
+    rated: Array<{
+      participant: MatchRecord["participants"][number];
+      result: RatingResult;
+    }>,
+    completedAt: number,
+  ): Promise<void> {
+    const userIds = rated
+      .map(({ participant }) => participant.userId)
+      .filter((userId): userId is string => userId !== null)
+      .sort();
+    const users = await client.query<{ id: string }>(
+      `
+        SELECT id
+        FROM qiju_users
+        WHERE id = ANY($1::uuid[])
+        ORDER BY id
+        FOR UPDATE
+      `,
+      [userIds],
+    );
+    if (users.rows.length !== userIds.length)
+      throw new ProductStoreNotFoundError("rated 玩家身份不存在");
+
+    const currentRatings = new Map<string, RatingRecord>();
+    for (const userId of userIds) {
+      await client.query(
+        `
+          INSERT INTO qiju_ratings (
+            user_id, game, rating, games_played, wins, losses, draws,
+            provisional, rating_version, updated_at
+          )
+          VALUES ($1, $2, $3, 0, 0, 0, 0, true, $4, $5)
+          ON CONFLICT (user_id, game) DO NOTHING
+        `,
+        [
+          userId,
+          match.game,
+          INITIAL_RATING,
+          RATING_VERSION,
+          new Date(completedAt),
+        ],
+      );
+      const result = await client.query<RatingRow>(
+        `
+          SELECT user_id, game, rating, games_played, wins, losses, draws,
+                 provisional, rating_version, updated_at
+          FROM qiju_ratings
+          WHERE user_id = $1 AND game = $2
+          FOR UPDATE
+        `,
+        [userId, match.game],
+      );
+      const row = result.rows[0];
+      if (!row) throw new Error("讀取 rated 評分失敗");
+      const current = parseRating(row);
+      if (current.ratingVersion !== RATING_VERSION)
+        throw new ProductStoreConflictError("評分版本不相容");
+      currentRatings.set(userId, current);
+    }
+
+    const first = rated[0];
+    const second = rated[1];
+    if (
+      !first ||
+      !second ||
+      !first.participant.userId ||
+      !second.participant.userId
+    )
+      throw new Error("rated 對局玩家資料不足");
+    const firstCurrent = currentRatings.get(first.participant.userId);
+    const secondCurrent = currentRatings.get(second.participant.userId);
+    if (!firstCurrent || !secondCurrent) throw new Error("rated 評分資料不足");
+    const calculations = [
+      calculateElo({
+        rating: firstCurrent.rating,
+        opponentRating: secondCurrent.rating,
+        gamesPlayed: firstCurrent.gamesPlayed,
+        result: first.result,
+      }),
+      calculateElo({
+        rating: secondCurrent.rating,
+        opponentRating: firstCurrent.rating,
+        gamesPlayed: secondCurrent.gamesPlayed,
+        result: second.result,
+      }),
+    ];
+    for (const [index, entry] of rated.entries()) {
+      const current = index === 0 ? firstCurrent : secondCurrent;
+      const calculation = calculations[index];
+      if (!calculation || !entry.participant.userId) continue;
+      const { result } = entry;
+      await client.query(
+        `
+          UPDATE qiju_ratings
+          SET rating = $3,
+              games_played = $4,
+              wins = $5,
+              losses = $6,
+              draws = $7,
+              provisional = $8,
+              rating_version = $9,
+              updated_at = $10
+          WHERE user_id = $1 AND game = $2
+        `,
+        [
+          entry.participant.userId,
+          match.game,
+          calculation.ratingAfter,
+          calculation.gamesAfter,
+          current.wins + (result === "win" ? 1 : 0),
+          current.losses + (result === "loss" ? 1 : 0),
+          current.draws + (result === "draw" ? 1 : 0),
+          calculation.provisional,
+          RATING_VERSION,
+          new Date(completedAt),
+        ],
+      );
+      await client.query(
+        `
+          INSERT INTO qiju_rating_results (
+            match_id, seat, user_id, game, result, rating_before,
+            rating_after, rating_delta, games_before, games_after,
+            k_factor, provisional, rating_version, created_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        `,
+        [
+          match.id,
+          entry.participant.seat,
+          entry.participant.userId,
+          match.game,
+          result,
+          calculation.ratingBefore,
+          calculation.ratingAfter,
+          calculation.ratingDelta,
+          calculation.gamesBefore,
+          calculation.gamesAfter,
+          calculation.kFactor,
+          calculation.provisional,
+          RATING_VERSION,
+          new Date(completedAt),
+        ],
+      );
+    }
+  }
+
   private async loadMatch(
     queryable: Queryable,
     id: string,
+    lock = false,
   ): Promise<MatchRecord | null> {
     const matchResult = await queryable.query<MatchRow>(
       `
@@ -945,6 +1215,7 @@ export class PostgresProductStore implements ProductStore {
                outcome_json, schema_version, retention_until
         FROM qiju_matches
         WHERE id = $1
+        ${lock ? "FOR UPDATE" : ""}
       `,
       [id],
     );

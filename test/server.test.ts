@@ -7,8 +7,12 @@ import { WebSocket, type RawData } from "ws";
 import { PostgresProductStore } from "../src/server/postgres-product-store.js";
 import { createServer } from "../src/server/server.js";
 import { PostgresRoomStore } from "../src/server/postgres-room-store.js";
+import {
+  createSessionToken,
+  SESSION_COOKIE_NAME,
+} from "../src/server/product-security.js";
 import { CHAT_RATE_LIMIT_COUNT } from "../src/shared/protocol.js";
-import type { ChatMessage } from "../src/shared/protocol.js";
+import type { ChatMessage, RoomMode } from "../src/shared/protocol.js";
 import type {
   GameState,
   NumericBoardState,
@@ -27,6 +31,7 @@ interface JoinedMessage {
   readonly code: string;
   readonly token: string;
   readonly side: number;
+  readonly mode: RoomMode;
 }
 
 interface ErrorMessage {
@@ -38,6 +43,7 @@ interface StateMessage {
   readonly type: "state";
   readonly code: string;
   readonly side: number;
+  readonly mode: RoomMode;
   readonly state: GameState | RiichiView;
   readonly players: Array<WirePlayer | null>;
   readonly rematch: number[];
@@ -131,8 +137,12 @@ const rawText = (data: RawData): string => {
   return data.toString("utf8");
 };
 
-async function client(url: string): Promise<TestClient> {
-  const ws = new WebSocket(url);
+async function client(url: string, sessionToken?: string): Promise<TestClient> {
+  const ws = new WebSocket(url, {
+    ...(sessionToken === undefined
+      ? {}
+      : { headers: { Cookie: `${SESSION_COOKIE_NAME}=${sessionToken}` } }),
+  });
   const queue: ServerMessage[] = [];
   const pending: Array<(message: ServerMessage) => void> = [];
   ws.on("message", (data) => {
@@ -306,6 +316,87 @@ void test("authoritative multiplayer rooms", async (t) => {
     assert.equal((await fetch(base + "/server.js")).status, 404);
     assert.equal((await fetch(base + "/..%2fpackage.json")).status, 404);
   });
+});
+
+void test("rated rooms require identities and settle ELO once", async (t) => {
+  const { server, wss, productStore, rooms } = createServer();
+  await once(server.listen(0, "127.0.0.1"), "listening");
+  const url = `ws://127.0.0.1:${String(portOf(server))}`;
+  t.after(async () => {
+    for (const ws of wss.clients) ws.terminate();
+    await closeServer(server);
+  });
+  const anonymous = await client(url);
+  anonymous.send({ type: "create", game: "gomoku", mode: "rated" });
+  assert.match((await anonymous.next("error")).message, /身份/);
+
+  const createIdentity = async (displayName: string) => {
+    const user = await productStore.createUser({ displayName });
+    const token = createSessionToken();
+    await productStore.createSession({
+      userId: user.id,
+      token,
+      expiresAt: Date.now() + 60_000,
+    });
+    return { user, token };
+  };
+  const first = await createIdentity("競技甲");
+  const second = await createIdentity("競技乙");
+  const a = await client(url, first.token);
+  const b = await client(url, second.token);
+  a.send({ type: "create", game: "gomoku", mode: "rated", name: "競技甲" });
+  const joined = await a.next("joined");
+  assert.equal(joined.mode, "rated");
+  await a.next("state");
+  b.send({ type: "join", code: joined.code, name: "競技乙" });
+  const bJoined = await b.next("joined");
+  assert.equal(bJoined.mode, "rated");
+  await a.next("state");
+  await b.next("state");
+  assert.equal(roomAt(rooms, joined.code).mode, "rated");
+  const matchId = roomAt(rooms, joined.code).matchId;
+  assert.ok(matchId);
+  assert.equal((await productStore.getMatch(matchId))?.mode, "rated");
+  const impostorIdentity = await createIdentity("冒用者");
+  const impostor = await client(url, impostorIdentity.token);
+  impostor.send({
+    type: "join",
+    code: joined.code,
+    token: bJoined.token,
+  });
+  assert.match((await impostor.next("error")).message, /相同玩家身份/);
+
+  b.send({ type: "resign" });
+  assert.equal((await a.next("state")).state.winner, 1);
+  await b.next("state");
+  const completed = await productStore.getMatch(matchId);
+  assert.equal(completed?.status, "completed");
+  const firstRating = await productStore.getUserRating(first.user.id, "gomoku");
+  const secondRating = await productStore.getUserRating(
+    second.user.id,
+    "gomoku",
+  );
+  assert.deepEqual(
+    {
+      rating: firstRating.rating,
+      gamesPlayed: firstRating.gamesPlayed,
+      wins: firstRating.wins,
+      losses: firstRating.losses,
+      provisional: firstRating.provisional,
+    },
+    { rating: 1520, gamesPlayed: 1, wins: 1, losses: 0, provisional: true },
+  );
+  assert.equal(secondRating.rating, 1480);
+  assert.equal(secondRating.losses, 1);
+  const retried = await productStore.completeMatch({
+    matchId,
+    outcome: { winnerSeat: 0, reason: "對手認輸" },
+  });
+  assert.equal(retried.status, "completed");
+  assert.equal(
+    (await productStore.getUserRating(first.user.id, "gomoku")).rating,
+    1520,
+  );
 });
 
 void test("riichi supports four private seats, pauses, and reconnects", async (t) => {

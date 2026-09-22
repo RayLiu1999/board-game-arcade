@@ -19,7 +19,7 @@
 - P1 的日麻 session snapshot／restore 已完成；多實例 Redis 仍保留到需要時再做。
 - Docker Compose 已能先執行 migration，再啟動應用程式；映像也可發布至 GHCR。
 - P3-A／P3-B 已補上 guest session、自己的對局歷史 API、個人偏好與基本統計；正式帳號合併、好友、積分與排行榜仍未開始。
-- 對戰聊天室與 emoji 已納入 P3-C／P3-E 規劃；P3-C 的第一個聊天室切片已完成，先支援對局玩家的即時純文字與 Unicode emoji，觀戰聊天室另訂權限。rating／ELO、公開配對與觀戰仍未開始。
+- 對戰聊天室與 emoji 已納入 P3-C／P3-E 規劃；P3-C 已完成聊天室切片與 rated／ELO 第一個切片，先支援對局玩家聊天與兩人一般棋類的競技私人房，觀戰聊天室與公開配對仍未開始。
 - PostgreSQL 現在同時保存進行中的房間、產品化 match／事件與個人偏好，但仍不等於完整的社交與競技資料庫。
 
 P3 的目標，是把「可以玩的一組棋類」提升成「玩家願意重複回來、可以累積紀錄、能公平競爭、也方便營運的產品」。因此 P3 的重點不是只增加棋規，而是補上身份、比賽、留存、可及性與營運能力。
@@ -255,6 +255,8 @@ P3-2 把「知道對手的房間」擴展成「系統幫玩家找到對手、讓
 **資料邊界與保存：** 第一版若只需要對局期間與重連後的短暫顯示，可以使用有上限的 room／match memory buffer。若後續需要檢舉、申訴、跨實例同步或管理稽核，再新增獨立的 `qiju_match_chat_messages`，不要把聊天塞進重播事件表；一列代表一則對局聊天室訊息，至少規劃 `id`、`match_id`、`sender_user_id`、`sender_seat`、`body`、`sequence`、`created_at` 與 `moderation_status`，以 `match_id + sequence` 保證順序唯一並建立對應查詢索引。未來真正建立 migration 時，每張表與每個欄位都必須有 PostgreSQL 原生 table／column comment，並明確定義保留、刪除與匿名化規則。
 
 **目前實作進度（2026-09-22）：** P3-C 的第一個可交付聊天室切片已完成。現有對戰房玩家可以在等待對手、對局中與結束後傳送純文字／Unicode emoji；伺服器只對房內玩家廣播，保留最多 50 則最近訊息，單則最多 500 個 Unicode 字元，單一連線 10 秒最多 8 則。訊息不寫入 match event、不放入 PostgreSQL 歷史，重連時由房間狀態補回有限訊息，重開 rematch 時清空。前端提供安全的純文字訊息顯示與常用 emoji 快速按鈕。
+
+**Rating／ELO 目前實作進度（2026-09-22）：** P3-C 的第二個可交付切片已完成。兩人一般棋類可建立 rated 私人房，建立與重連都要求相同的玩家身份；合法終局後由伺服器以 ELO v1 結算，每種棋種各自維護初始 1500 分、前 10 場 provisional 與較高 K factor。結算寫入 `qiju_ratings` 與不可重複的 `qiju_rating_results`，同一 `matchId` 重試不會重複加分；AI、同機、好友房、取消與中止對局不影響 rating。玩家可透過 `/api/me/ratings` 讀取自己的分數與戰績。
 
 **權限與防濫用：**
 

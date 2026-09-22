@@ -2,15 +2,18 @@ import { expect, test } from "@playwright/test";
 
 test("players can create a room, join it, and make a move", async ({
   page,
+  browser,
 }) => {
   await page.goto("/");
   await page.locator("#invite-button").click();
   await expect(page.locator("#setup-dialog")).toBeVisible();
   await page.locator('[data-mode="online"]').click();
+  await page.locator('[data-mode="rated"]').click();
   await page.locator("#player-name").fill("房主");
   await page.locator("#start-button").click();
 
   await expect(page.locator("#play-screen")).toBeVisible();
+  await expect(page.locator("#mode-badge")).toContainText("競技對局");
   await expect(page.locator("#room-info")).toBeVisible();
   const code = (await page.locator("#room-code").textContent())?.trim() ?? "";
   expect(code).toMatch(/^[A-F0-9]{6}$/);
@@ -18,7 +21,8 @@ test("players can create a room, join it, and make a move", async ({
     "將房間連結分享給朋友",
   );
 
-  const guest = await page.context().newPage();
+  const guestContext = await browser.newContext();
+  const guest = await guestContext.newPage();
   await guest.goto("/");
   await guest.locator("#header-join").click();
   await guest.locator("#join-code").fill(code);
@@ -55,4 +59,5 @@ test("players can create a room, join it, and make a move", async ({
   ).toBeVisible();
 
   await guest.close();
+  await guestContext.close();
 });

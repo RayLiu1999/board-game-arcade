@@ -18,6 +18,7 @@ import {
   type MatchMode,
   type MatchRecord,
   type ProductStore,
+  type RatingRecord,
   type UpdateUserPreferencesInput,
 } from "./product-store.js";
 
@@ -231,6 +232,18 @@ const publicMatch = (match: MatchRecord, userId: string) => {
   };
 };
 
+const publicRating = (rating: RatingRecord) => ({
+  game: rating.game,
+  rating: rating.rating,
+  gamesPlayed: rating.gamesPlayed,
+  wins: rating.wins,
+  losses: rating.losses,
+  draws: rating.draws,
+  provisional: rating.provisional,
+  ratingVersion: rating.ratingVersion,
+  updatedAt: rating.updatedAt,
+});
+
 const apiError = (error: unknown): { status: number; message: string } => {
   if (error instanceof ProductHttpError)
     return { status: error.status, message: error.message };
@@ -420,6 +433,18 @@ export const createProductHttpHandler =
           draws: stats.draws,
           byGame: stats.byGame,
         });
+        return true;
+      }
+
+      if (url.pathname === "/api/me/ratings" && request.method === "GET") {
+        const authenticated = await requireIdentity(
+          request,
+          dependencies.identity,
+        );
+        const ratings = await dependencies.productStore.getUserRatings(
+          authenticated.user.id,
+        );
+        sendJson(response, 200, { ratings: ratings.map(publicRating) });
         return true;
       }
 

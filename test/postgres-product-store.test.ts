@@ -20,8 +20,10 @@ if (!databaseUrl) {
     const store = new PostgresProductStore({ connectionString: databaseUrl });
     const cleanup = new Pool({ connectionString: databaseUrl });
     const userId = randomUUID();
+    const opponentId = randomUUID();
     const matchId = randomUUID();
     const secondMatchId = randomUUID();
+    const ratedMatchId = randomUUID();
     const token = createSessionToken();
 
     t.after(async () => {
@@ -30,7 +32,11 @@ if (!databaseUrl) {
       await cleanup.query("DELETE FROM qiju_matches WHERE id = $1", [
         secondMatchId,
       ]);
+      await cleanup.query("DELETE FROM qiju_matches WHERE id = $1", [
+        ratedMatchId,
+      ]);
       await cleanup.query("DELETE FROM qiju_users WHERE id = $1", [userId]);
+      await cleanup.query("DELETE FROM qiju_users WHERE id = $1", [opponentId]);
       await cleanup.end();
     });
 
@@ -56,6 +62,8 @@ if (!databaseUrl) {
           "qiju_match_events",
           "qiju_match_participants",
           "qiju_matches",
+          "qiju_rating_results",
+          "qiju_ratings",
           "qiju_room_players",
           "qiju_rooms",
           "qiju_sessions",
@@ -80,6 +88,16 @@ if (!databaseUrl) {
       {
         table_name: "qiju_matches",
         description: "棋聚對局主檔與生命週期、結果摘要。",
+      },
+      {
+        table_name: "qiju_rating_results",
+        description:
+          "棋聚 rated 對局的不可重複評分結算明細；一列代表一名參與者在一局中的分數變化。",
+      },
+      {
+        table_name: "qiju_ratings",
+        description:
+          "棋聚玩家依棋種保存的目前 rated 評分與戰績摘要；一列代表一名玩家在一個棋種的評分。",
       },
       {
         table_name: "qiju_room_players",
@@ -127,6 +145,8 @@ if (!databaseUrl) {
           "qiju_match_events",
           "qiju_match_participants",
           "qiju_matches",
+          "qiju_rating_results",
+          "qiju_ratings",
           "qiju_room_players",
           "qiju_rooms",
           "qiju_sessions",
@@ -140,6 +160,11 @@ if (!databaseUrl) {
       id: userId,
       displayName: "資料庫玩家",
       createdAt: 1_700_000_000_000,
+    });
+    const opponent = await store.createUser({
+      id: opponentId,
+      displayName: "資料庫對手",
+      createdAt: 1_700_000_000_001,
     });
     const session = await store.createSession({
       userId: user.id,
@@ -234,6 +259,42 @@ if (!databaseUrl) {
       },
       { completed: 2, wins: 1, losses: 1, draws: 0 },
     );
+    const ratedMatch = await store.createMatch({
+      id: ratedMatchId,
+      roomCode: "RATE01",
+      game: "gomoku",
+      mode: "rated",
+      startedAt: 1_700_000_000_200,
+    });
+    await store.addMatchParticipant({
+      matchId: ratedMatch.id,
+      seat: 0,
+      userId: user.id,
+      displayName: user.displayName,
+      bot: false,
+    });
+    await store.addMatchParticipant({
+      matchId: ratedMatch.id,
+      seat: 1,
+      userId: opponent.id,
+      displayName: opponent.displayName,
+      bot: false,
+    });
+    await store.completeMatch({
+      matchId: ratedMatch.id,
+      outcome: { winnerSeat: 0, reason: "五連線" },
+      completedAt: 1_700_000_000_201,
+    });
+    const rated = await store.getUserRating(user.id, "gomoku");
+    assert.equal(rated.rating, 1520);
+    assert.equal(rated.gamesPlayed, 1);
+    assert.equal((await store.getUserRatings(user.id)).length, 1);
+    await store.completeMatch({
+      matchId: ratedMatch.id,
+      outcome: { winnerSeat: 0, reason: "五連線" },
+      completedAt: 1_700_000_000_202,
+    });
+    assert.equal((await store.getUserRating(user.id, "gomoku")).rating, 1520);
     assert.equal(await store.revokeSession(token, 1_700_000_000_007), true);
     assert.equal(await store.findActiveSession(token, 1_700_000_000_008), null);
   });

@@ -25,16 +25,19 @@ import {
   GAME_IDS,
   isGameId,
   type ChatMessage,
+  type RoomMode,
 } from "../shared/protocol.js";
 import type { Difficulty } from "./ai.js";
 
 type Mode = "ai" | "local" | "online";
+type SetupMode = Mode | "rated";
 type SelectedCell = number | string | null;
 type AppRiichiState = RiichiView & { game: "riichi"; rounds: number };
 type AppState = BoardState | AppRiichiState;
 
 interface ClientRoom extends RoomView {
   readonly code: string;
+  readonly mode: RoomMode;
   readonly token: string;
   readonly side: number;
   readonly chat: readonly ChatMessage[];
@@ -66,12 +69,14 @@ interface JoinedMessage {
   readonly code: string;
   readonly token: string;
   readonly side: number;
+  readonly mode: RoomMode;
 }
 
 interface RoomStateMessage {
   readonly type: "state";
   readonly code: string;
   readonly side: number;
+  readonly mode: RoomMode;
   readonly state: BoardState | AppRiichiState | RiichiWaitingState;
   readonly players: RoomView["players"];
   readonly rematch: number[];
@@ -112,6 +117,9 @@ const find = (selector: string): DomElement | null =>
 
 const isMode = (value: string | undefined): value is Mode =>
   value === "ai" || value === "local" || value === "online";
+
+const isSetupMode = (value: string | undefined): value is SetupMode =>
+  isMode(value) || value === "rated";
 
 const isDifficulty = (value: string): value is Difficulty =>
   value === "easy" || value === "medium" || value === "hard";
@@ -172,7 +180,7 @@ let state: AppState | null = null,
   taskId = 0,
   thinking = false;
 let setupGame: GameId = "gomoku",
-  setupMode: Mode = "ai",
+  setupMode: SetupMode = "ai",
   socket: WebSocket | null = null,
   room: ClientRoom | null = null,
   connected = false,
@@ -335,7 +343,7 @@ $("#decor-board").innerHTML = Array.from(
   (_, i) =>
     `<span class="${(Math.floor(i / 8) + (i % 8)) % 2 ? "dark" : ""} ${i > 31 ? "white" : ""}">${{ 9: "♟", 12: "♚", 14: "♜", 19: "♟", 26: "♝", 37: "♙", 42: "♙", 45: "♕", 51: "♔" }[i] || ""}</span>`,
 ).join("");
-function openSetup(game: GameId, chosenMode: Mode = "ai"): void {
+function openSetup(game: GameId, chosenMode: SetupMode = "ai"): void {
   setupGame = game;
   setupMode = chosenMode;
   $("#setup-title").textContent = `來一局${GAMES[game].name}`;
@@ -354,7 +362,7 @@ function openSetup(game: GameId, chosenMode: Mode = "ai"): void {
   setSetupMode(chosenMode);
   $("#setup-dialog").showModal();
 }
-function setSetupMode(m: Mode): void {
+function setSetupMode(m: SetupMode): void {
   setupMode = m;
   $$("[data-mode]").forEach((b) =>
     b.classList.toggle("active", b.dataset.mode === m),
@@ -364,13 +372,17 @@ function setSetupMode(m: Mode): void {
     setupGame === "riichi"
       ? "<span>♟</span>同機四人<small>交接裝置</small>"
       : "<span>♟</span>同機雙人<small>面對面對弈</small>";
-  $("#name-options").hidden = m !== "online";
+  const ratedButton = find('[data-mode="rated"]');
+  if (ratedButton) ratedButton.hidden = setupGame === "riichi";
+  $("#name-options").hidden = m !== "online" && m !== "rated";
   $("#setup-note").textContent =
     m === "ai"
       ? "內建休閒 AI，可選擇難度與先後手。"
       : m === "local"
         ? "輪流操作同一台裝置，一起享受棋盤上的時光。"
-        : "建立房間後分享連結，朋友連線即可開始。";
+        : m === "rated"
+          ? "競技房會在合法終局後更新雙方 ELO；需要玩家身份。"
+          : "建立房間後分享連結，朋友連線即可開始。";
   if (setupGame === "riichi")
     $("#setup-note").textContent =
       m === "ai"
@@ -379,12 +391,13 @@ function setSetupMode(m: Mode): void {
           ? "四人輪流交接裝置，查看手牌前會顯示遮罩。日麻不提供本機存檔與悔棋。"
           : "四人房間；房主可用 AI 補齊空位後開始。";
   $("#start-button").innerHTML =
-    (m === "online" ? "建立房間" : "開始對弈") + " <span>→</span>";
+    (m === "online" || m === "rated" ? "建立房間" : "開始對弈") +
+    " <span>→</span>";
 }
 $$("[data-mode]").forEach(
   (b) =>
     (b.onclick = () => {
-      if (isMode(b.dataset.mode)) setSetupMode(b.dataset.mode);
+      if (isSetupMode(b.dataset.mode)) setSetupMode(b.dataset.mode);
     }),
 );
 $("#quick-play").onclick = () => {
@@ -535,7 +548,7 @@ $("#setup-form").onsubmit = async (e) => {
   cancelAI();
   snapshots = [];
   selected = null;
-  if (setupMode === "online") {
+  if (setupMode === "online" || setupMode === "rated") {
     try {
       await ensureProductSession($("#player-name").value);
       await connect();
@@ -545,6 +558,7 @@ $("#setup-form").onsubmit = async (e) => {
         JSON.stringify({
           type: "create",
           game: setupGame,
+          ...(setupMode === "rated" ? { mode: "rated" as const } : {}),
           size: Number($("#board-size").value),
           name: $("#player-name").value,
           rounds: Number($("#riichi-rounds").value),
@@ -628,6 +642,7 @@ function connect(): Promise<void> {
         room = {
           ...room,
           code: msg.code,
+          mode: msg.mode,
           token: msg.token,
           side: msg.side,
           chat: room?.chat ?? [],
@@ -645,6 +660,7 @@ function connect(): Promise<void> {
         room = {
           ...room,
           players: msg.players ?? [],
+          mode: msg.mode,
           rematch: msg.rematch,
           chat: msg.chat,
         };
@@ -873,7 +889,9 @@ function render(): void {
       ? `✦ AI 對戰 · ${{ easy: "入門", medium: "標準", hard: "進階" }[difficulty]}`
       : mode === "local"
         ? "♟ 同機雙人"
-        : "♧ 線上好友";
+        : room?.mode === "rated"
+          ? "♜ 競技對局"
+          : "♧ 線上好友";
   const done = s.winner !== null,
     scoring = s.phase === "scoring",
     waiting =
@@ -1438,7 +1456,7 @@ if (invite) {
   $("#join-code").value = invite.toUpperCase();
   openJoin();
 } else if (savedRoom) {
-  room = { ...savedRoom, side: 1, chat: [] };
+  room = { ...savedRoom, mode: "friend", side: 1, chat: [] };
   mode = "online";
   connect()
     .then(() => {

@@ -117,6 +117,7 @@ export class RoomManager {
   private snapshot(room: Room): RoomSnapshot {
     const snapshot: RoomSnapshot = {
       code: room.code,
+      mode: room.mode,
       state: structuredClone(room.state),
       players: room.players.map((player) =>
         player
@@ -144,11 +145,13 @@ export class RoomManager {
     const existing = room.matchId
       ? await this.productStore.getMatch(room.matchId)
       : null;
-    if (!existing) {
+    if (existing) {
+      room.mode = existing.mode === "rated" ? "rated" : "friend";
+    } else {
       const match = await this.productStore.createMatch({
         roomCode: room.code,
         game: room.state.game,
-        mode: "friend",
+        mode: room.mode,
         startedAt: room.touched,
       });
       room.matchId = match.id;
@@ -272,7 +275,7 @@ export class RoomManager {
     const match = await this.productStore.createMatch({
       roomCode: room.code,
       game: room.state.game,
-      mode: "friend",
+      mode: room.mode,
       startedAt: this.now(),
     });
     room.matchId = match.id;
@@ -406,6 +409,7 @@ export class RoomManager {
         type: "state",
         code: room.code,
         side: roomSide(room.state, index),
+        mode: room.mode,
         state: room.session ? room.session.view(index) : room.state,
         players: room.players.map((entry) =>
           entry
@@ -559,6 +563,7 @@ export class RoomManager {
       } while (this.rooms.has(code));
       room = {
         code,
+        mode: message.mode ?? "friend",
         state,
         players: Array<Room["players"][number]>(
           message.game === "riichi" ? 4 : 2,
@@ -573,6 +578,11 @@ export class RoomManager {
         pendingEvents: [],
         chat: [],
       };
+      if (room.mode === "rated") {
+        if (message.game === "riichi")
+          throw new Error("日麻暫不支援 rated 對局");
+        if (!socket.userId) throw new Error("競技房需要玩家身份");
+      }
       await this.ensureMatch(room);
       await this.createPersistentRoom(room);
       this.rooms.set(code, room);
@@ -593,6 +603,18 @@ export class RoomManager {
     }
 
     const existing = room.players[index];
+    if (room.mode === "rated") {
+      if (!socket.userId) throw new Error("競技房需要玩家身份");
+      if (existing?.userId && existing.userId !== socket.userId)
+        throw new Error("競技房重連需要相同玩家身份");
+      if (
+        room.players.some(
+          (player, playerIndex) =>
+            playerIndex !== index && player?.userId === socket.userId,
+        )
+      )
+        throw new Error("競技房不能與自己對戰");
+    }
     if (existing?.socket && existing.socket !== socket) {
       existing.socket.room = null;
       existing.socket.close(4001, "Session replaced");
@@ -620,6 +642,7 @@ export class RoomManager {
       code: room.code,
       token,
       side: socket.side,
+      mode: room.mode,
     });
     if (room.state.game === "riichi" && this.isReady(room)) {
       if (room.session) room.session.pause(false);
@@ -695,6 +718,7 @@ export class RoomManager {
 
 const restore = (snapshot: RoomSnapshot): Room => ({
   code: snapshot.code,
+  mode: snapshot.mode ?? "friend",
   state: structuredClone(snapshot.state),
   players: snapshot.players.map((player) =>
     player

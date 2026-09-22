@@ -2,7 +2,7 @@ import type { WebSocket } from "ws";
 
 import type { RiichiSession } from "../../lib/riichi-session.js";
 import type { GameState } from "../shared/game-types.js";
-import type { ChatMessage, PlayerSide } from "../shared/protocol.js";
+import type { ChatMessage, PlayerSide, RoomMode } from "../shared/protocol.js";
 import type { AppendMatchEventInput } from "./product-store.js";
 
 export type RiichiSide = 1 | 2 | 3 | 4;
@@ -35,6 +35,7 @@ export interface RoomPlayer {
 
 export interface Room {
   code: string;
+  mode: RoomMode;
   state: RoomState;
   players: Array<RoomPlayer | null>;
   rounds: number;
