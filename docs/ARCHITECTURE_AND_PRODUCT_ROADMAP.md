@@ -7,7 +7,7 @@
 目前基準版本：
 
 - Git commit：`91630b1 Initial commit: Qiju board game arcade`
-- 測試：本機以 `pnpm test` 執行，目前共 66 個測試；設定專用 PostgreSQL 測試資料庫時會執行完整 adapter 與 server restart cases；`pnpm run test:e2e` 通過 1 個瀏覽器流程。CI 與線上部署仍使用 npm。
+- 測試：本機以 `pnpm test` 執行，目前共 66 個測試；設定專用 PostgreSQL 測試資料庫時會執行完整 adapter 與 server restart cases；`pnpm run test:e2e` 通過 1 個瀏覽器流程。CI 與線上部署也統一使用 pnpm。
 - 執行環境：Node.js 22 或更新版本
 
 ### TS-first 決策
@@ -145,7 +145,7 @@ majiang-core 推進牌局事件
 
 ### `src/`：需要建置或由 `tsx` 執行的來源碼
 
-`src/shared/` 放置前後端共用的狀態、訊息型別與棋規；`src/server/` 由 `server.ts` 組裝 HTTP、WebSocket、房間與 command protocol 模組。`src/riichi-worker.ts` 是本機日麻 Worker 的來源檔，仍使用 npm 套件，必須先由 esbuild 打包才能在瀏覽器執行。
+`src/shared/` 放置前後端共用的狀態、訊息型別與棋規；`src/server/` 由 `server.ts` 組裝 HTTP、WebSocket、房間與 command protocol 模組。`src/riichi-worker.ts` 是本機日麻 Worker 的來源檔，仍使用第三方套件，必須先由 esbuild 打包才能在瀏覽器執行。
 
 ```text
 src/shared/engine.ts ─┐
@@ -163,7 +163,7 @@ public/engine.js / public/shogi.js / public/riichi-worker.js
 
 - 打包 shared 與 client TypeScript bundle
 - 打包日麻 Worker
-- 將 npm 依賴轉成瀏覽器可執行格式
+- 將套件依賴轉成瀏覽器可執行格式
 - 複製第三方授權檔
 
 ### `test/`：規則與整合測試

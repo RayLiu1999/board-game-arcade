@@ -7,8 +7,8 @@ import { refreshDatabase } from "../src/server/postgres-migrations.js";
 
 const usage = (): void => {
   console.log(`用法：
-  npm run refresh              互動確認後重建 qiju_* 資料表
-  npm run refresh -- --yes     非互動模式，明確確認後重建資料表
+  pnpm run refresh              互動確認後重建 qiju_* 資料表
+  pnpm run refresh -- --yes     非互動模式，明確確認後重建資料表
 
 選項：
   --yes                 跳過互動確認
@@ -36,7 +36,7 @@ const run = async (): Promise<void> => {
   const confirmed = args.has("--yes");
   if (!confirmed) {
     if (!stdin.isTTY || !stdout.isTTY)
-      throw new Error("非互動環境請使用 npm run refresh -- --yes");
+      throw new Error("非互動環境請使用 pnpm run refresh -- --yes");
     const prompt = createInterface({ input: stdin, output: stdout });
     try {
       const answer = await prompt.question(

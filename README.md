@@ -17,7 +17,7 @@ pnpm start
 PORT=8080 pnpm start
 ```
 
-本機開發使用 pnpm；Docker、CI 與正式線上部署維持 npm。`package-lock.json` 提供線上 `npm ci`，`pnpm-lock.yaml` 提供本機可重現安裝。專案會自動載入根目錄的 `.env`。第一次設定可參考 `.env.example`；請把實際的 PostgreSQL 連線字串填入 `.env`，不要提交該檔案。`DATABASE_URL` 用於正式啟動時保存房間 snapshot、玩家偏好、對局結果與最小事件，`QIJU_TEST_DATABASE_URL` 用於 PostgreSQL 整合測試，應指向獨立的測試資料庫：
+本機、Docker、CI 與正式線上部署統一使用 pnpm，`pnpm-lock.yaml` 是唯一的依賴鎖檔，避免不同環境的套件版本漂移。專案會自動載入根目錄的 `.env`。第一次設定可參考 `.env.example`；請把實際的 PostgreSQL 連線字串填入 `.env`，不要提交該檔案。`DATABASE_URL` 用於正式啟動時保存房間 snapshot、玩家偏好、對局結果與最小事件，`QIJU_TEST_DATABASE_URL` 用於 PostgreSQL 整合測試，應指向獨立的測試資料庫：
 
 ```sh
 # .env
@@ -31,7 +31,7 @@ QIJU_TEST_DATABASE_URL='postgresql://user:password@host:5432/qiju_test'
 
 ### Docker Compose
 
-需要 Docker Desktop 或其他相容 Docker Compose 的環境。Compose 會先啟動一次性的 `migrate` service，使用 `DATABASE_URL` 連線到外部 PostgreSQL 並執行 migration；成功後才啟動 Node.js 應用程式。Docker 內仍使用 npm，與線上部署一致：
+需要 Docker Desktop 或其他相容 Docker Compose 的環境。Compose 會先啟動一次性的 `migrate` service，使用 `DATABASE_URL` 連線到外部 PostgreSQL 並執行 migration；成功後才啟動 Node.js 應用程式。Docker 內也使用 pnpm，與本機、CI 和線上部署一致：
 
 ```sh
 cp .env.docker.example .env.docker
@@ -77,7 +77,7 @@ docker run --rm --name qiju \
 正式啟動時若設定 `DATABASE_URL`，線上房間與產品化對局資料會使用 PostgreSQL；未設定時使用 memory store，適合本機開發。可用 `QIJU_ROOM_STORE=memory` 強制使用 memory store：
 
 ```sh
-DATABASE_URL='postgresql://user:password@host:5432/qiju' npm start
+DATABASE_URL='postgresql://user:password@host:5432/qiju' pnpm start
 ```
 
 PostgreSQL migration 會在伺服器啟動時自動初始化。日麻 live session 會以版本化 snapshot 保存，伺服器重啟後需真人重新連線才會繼續；已完成的一般棋類與日麻對局會另外保存 match、參與者與最小事件。線上模式會自動建立 HttpOnly guest session；也可以使用 `/api/me`、`/api/me/matches`、`/api/me/stats` 查詢自己的資料，或用 `/api/me/claim-room` 把既有 guest seat 綁定到身份。
@@ -162,8 +162,7 @@ src/server/product-store.ts       User／Session／Match／Audit abstraction 與
 src/server/product-identity.ts    guest identity、session authentication 與撤銷
 src/server/product-security.ts    session token 產生、hash 與 constant-time 比對
 src/server/postgres-migrations.ts 共用 PostgreSQL migration runner
-package-lock.json          線上 npm 安裝鎖檔
-pnpm-lock.yaml              本機 pnpm 安裝鎖檔
+pnpm-lock.yaml              本機、CI 與線上 pnpm 安裝鎖檔
 scripts/migrate.ts         套用可重複執行的 migration
 scripts/refresh.ts         清空並在 transaction 內重建 qiju_* 資料表
 src/server/migrations/001-room-store.sql 房間與玩家資料表 migration
