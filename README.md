@@ -25,6 +25,8 @@ DATABASE_URL='postgresql://user:password@host:5432/qiju'
 QIJU_TEST_DATABASE_URL='postgresql://user:password@host:5432/qiju_test'
 ```
 
+需要只套用 migration 時執行 `npm run migrate`。如果要清空目前 `DATABASE_URL` 中的 `qiju_*` 資料表並完整重建，執行 `npm run refresh`，互動時輸入 `REFRESH` 確認；非互動環境可用 `npm run refresh -- --yes`。refresh 會在同一個 transaction 內刪除並重建，migration 失敗時會 rollback；正式環境預設禁止執行，必須額外加上 `--allow-production`。
+
 `npm run dev` 會在伺服器檔案變更時重新啟動。前端為原生 ES modules，伺服器與共用棋規以 TypeScript 維護，啟動與測試由 `tsx` 執行。日麻 Worker 與共用棋規 bundle 可由 `npm run build` 產生；安裝依賴後，執行時不載入 CDN 或外部服務。
 
 ### Docker Compose
@@ -160,6 +162,8 @@ src/server/product-store.ts       User／Session／Match／Audit abstraction 與
 src/server/product-identity.ts    guest identity、session authentication 與撤銷
 src/server/product-security.ts    session token 產生、hash 與 constant-time 比對
 src/server/postgres-migrations.ts 共用 PostgreSQL migration runner
+scripts/migrate.ts         套用可重複執行的 migration
+scripts/refresh.ts         清空並在 transaction 內重建 qiju_* 資料表
 src/server/migrations/001-room-store.sql 房間與玩家資料表 migration
 src/server/migrations/002-riichi-room-store.sql 日麻 snapshot 欄位 migration
 src/server/migrations/003-product-foundation.sql identity、match、event 與 audit migration
