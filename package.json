@@ -8,7 +8,7 @@
     "dev": "node --env-file-if-exists=.env --import=tsx --watch src/server/server.ts",
     "migrate": "node --env-file-if-exists=.env --import=tsx scripts/migrate.ts",
     "test": "node --env-file-if-exists=.env --import=tsx --test test/*.ts",
-    "test:postgres": "node --env-file-if-exists=.env --import=tsx --test test/postgres-room-store.test.ts test/server.test.ts",
+    "test:postgres": "node --env-file-if-exists=.env --import=tsx --test test/postgres-room-store.test.ts test/postgres-product-store.test.ts test/server.test.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint \"**/*.ts\" --max-warnings 0",
     "format": "prettier --write lib/*.ts src/**/*.ts scripts/*.ts test/**/*.ts playwright.config.ts public/index.html public/style.css docs/*.md README.md package.json tsconfig.json eslint.config.mjs",

@@ -40,6 +40,12 @@ export interface RoomManagerOptions {
   now?: () => number;
 }
 
+export interface ClaimedRoomIdentity {
+  readonly code: string;
+  readonly matchId?: string;
+  readonly seat: number;
+}
+
 export const send: SendMessage = (socket, data) => {
   if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(data));
 };
@@ -161,6 +167,41 @@ export class RoomManager {
         joinedAt: room.touched,
       });
     }
+  }
+
+  async claimPlayerIdentity(
+    code: string,
+    roomToken: string,
+    userId: string,
+  ): Promise<ClaimedRoomIdentity> {
+    await this.ready;
+    return this.runExclusive(code, async () => {
+      const room = this.rooms.get(code);
+      if (!room) throw new Error("找不到房間，請確認房間代碼");
+      const seat = room.players.findIndex((player) =>
+        Boolean(player && matchesRoomToken(roomToken, player.tokenHash)),
+      );
+      const player = seat < 0 ? undefined : room.players[seat];
+      if (!player) throw new Error("房間 token 無效或已失效");
+      if (player.bot) throw new Error("AI 座位不能綁定使用者身份");
+      if (player.userId !== undefined && player.userId !== userId)
+        throw new Error("此座位已綁定其他使用者");
+      if (player.userId === userId)
+        return {
+          code: room.code,
+          ...(room.matchId === undefined ? {} : { matchId: room.matchId }),
+          seat,
+        };
+      if (!room.matchId) throw new Error("房間尚未建立對局");
+      const match = await this.productStore.getMatch(room.matchId);
+      if (!match || match.status !== "active")
+        throw new Error("對局已結束，無法再綁定 guest 身份");
+      await this.productStore.linkMatchParticipant(room.matchId, seat, userId);
+      player.userId = userId;
+      this.touch(room);
+      await this.persist(room);
+      return { code: room.code, matchId: room.matchId, seat };
+    });
   }
 
   recordMatchEvent(
@@ -511,12 +552,11 @@ export class RoomManager {
         ? message.token
         : createRoomToken();
     const name = existing?.name ?? normalizeName(message.name, index);
+    const userId = existing?.userId ?? (existing ? undefined : socket.userId);
     room.players[index] = {
       name,
       tokenHash: existing?.tokenHash ?? hashRoomToken(token),
-      ...(existing?.userId === undefined && socket.userId === undefined
-        ? {}
-        : { userId: existing?.userId ?? socket.userId }),
+      ...(userId === undefined ? {} : { userId }),
       socket,
       ...(existing?.bot ? { bot: true } : {}),
     };

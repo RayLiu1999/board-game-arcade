@@ -17,7 +17,7 @@ npm start
 PORT=8080 npm start
 ```
 
-專案會自動載入根目錄的 `.env`。第一次設定可參考 `.env.example`；請把實際的 PostgreSQL 連線字串填入 `.env`，不要提交該檔案。`DATABASE_URL` 用於正式啟動時保存房間 snapshot、對局結果與最小事件，`QIJU_TEST_DATABASE_URL` 用於 PostgreSQL 整合測試，應指向獨立的測試資料庫：
+專案會自動載入根目錄的 `.env`。第一次設定可參考 `.env.example`；請把實際的 PostgreSQL 連線字串填入 `.env`，不要提交該檔案。`DATABASE_URL` 用於正式啟動時保存房間 snapshot、玩家偏好、對局結果與最小事件，`QIJU_TEST_DATABASE_URL` 用於 PostgreSQL 整合測試，應指向獨立的測試資料庫：
 
 ```sh
 # .env
@@ -78,7 +78,7 @@ docker run --rm --name qiju \
 DATABASE_URL='postgresql://user:password@host:5432/qiju' npm start
 ```
 
-PostgreSQL migration 會在伺服器啟動時自動初始化。日麻 live session 會以版本化 snapshot 保存，伺服器重啟後需真人重新連線才會繼續；已完成的一般棋類與日麻對局會另外保存 match、參與者與最小事件。
+PostgreSQL migration 會在伺服器啟動時自動初始化。日麻 live session 會以版本化 snapshot 保存，伺服器重啟後需真人重新連線才會繼續；已完成的一般棋類與日麻對局會另外保存 match、參與者與最小事件。線上模式會自動建立 HttpOnly guest session；也可以使用 `/api/me`、`/api/me/matches`、`/api/me/stats` 查詢自己的資料，或用 `/api/me/claim-room` 把既有 guest seat 綁定到身份。
 
 ## 棋種與規則
 
@@ -140,13 +140,14 @@ npm run test:e2e
 npm run test:postgres # 需設定 QIJU_TEST_DATABASE_URL
 ```
 
-`npm test` 使用 Node 內建測試執行器，涵蓋棋規（含將棋打入／升變／打步詰）、七種棋的規則契約、可重現走訪、fast-check 合法路徑與 reachable random positions 測試、協定訊息邊界、日麻合法選項／無役與振聽／符番／結算／暗牌隔離、AI 合法走法、WebSocket 兩端同步、非法／過期落子、滿房、斷線重連、認輸、再戰與 HTTP 檔案邊界，也包含 PostgreSQL adapter、identity/session、match event idempotency 與重啟恢復測試（未設定專用 DB 時各 1 項 skip）。`npm run test:postgres` 會執行需要真實 PostgreSQL 的 adapter 與 server restart 測試，請使用獨立測試資料庫設定 `QIJU_TEST_DATABASE_URL`。`npm run test:e2e` 會先建置瀏覽器 bundle，再用 Playwright 驗證建立房間、加入房間與落子同步。整合測試會在本機開啟隨機連接埠；E2E 會啟動固定的 4173 連接埠。
+`npm test` 使用 Node 內建測試執行器，涵蓋棋規（含將棋打入／升變／打步詰）、七種棋的規則契約、可重現走訪、fast-check 合法路徑與 reachable random positions 測試、協定訊息邊界、日麻合法選項／無役與振聽／符番／結算／暗牌隔離、AI 合法走法、WebSocket 兩端同步、非法／過期落子、滿房、斷線重連、認輸、再戰與 HTTP 檔案邊界，也包含 PostgreSQL adapter、identity/session、match event idempotency、guest claim、歷史／統計與重啟恢復測試（未設定專用 DB 時各 1 項 skip）。`npm run test:postgres` 會執行需要真實 PostgreSQL 的 adapter 與 server restart 測試，請使用獨立測試資料庫設定 `QIJU_TEST_DATABASE_URL`。`npm run test:e2e` 會先建置瀏覽器 bundle，再用 Playwright 驗證建立房間、加入房間與落子同步。整合測試會在本機開啟隨機連接埠；E2E 會啟動固定的 4173 連接埠。
 
 ## 程式結構
 
 ```text
 src/server/server.ts     HTTP、WebSocket 與房間模組的組裝入口
 src/server/http-server.ts 靜態檔案服務與 port parser
+src/server/product-http.ts    guest session、個人資料、歷史與統計 API
 src/server/websocket-server.ts WebSocket 連線生命週期與錯誤邊界
 src/server/room-manager.ts 房間建立、廣播、日麻啟動與清理
 src/server/game-protocol.ts client command 的權威分派
@@ -162,6 +163,7 @@ src/server/postgres-migrations.ts 共用 PostgreSQL migration runner
 src/server/migrations/001-room-store.sql 房間與玩家資料表 migration
 src/server/migrations/002-riichi-room-store.sql 日麻 snapshot 欄位 migration
 src/server/migrations/003-product-foundation.sql identity、match、event 與 audit migration
+src/server/migrations/004-user-preferences.sql 個人偏好 migration
 src/shared/engine.ts     一般棋類共用規則與狀態轉移
 src/shared/shogi.ts      將棋規則與持駒
 src/shared/protocol.ts   WebSocket 訊息型別與 runtime parser

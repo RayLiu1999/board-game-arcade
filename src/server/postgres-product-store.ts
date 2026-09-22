@@ -9,6 +9,8 @@ import {
   PRODUCT_SCHEMA_VERSION,
   ProductStoreConflictError,
   ProductStoreNotFoundError,
+  defaultUserPreferences,
+  mergeUserPreferences,
   type AbortMatchInput,
   type AddMatchParticipantInput,
   type AppendMatchEventInput,
@@ -18,6 +20,8 @@ import {
   type CreateSessionInput,
   type CreateUserInput,
   type MatchEvent,
+  type MatchHistoryPage,
+  type ListMatchHistoryInput,
   type MatchMode,
   type MatchOutcome,
   type MatchParticipant,
@@ -27,7 +31,12 @@ import {
   type ProductStore,
   type RecordAuditInput,
   type SessionRecord,
+  type UpdateUserPreferencesInput,
+  type UpdateUserProfileInput,
+  type UserMatchStats,
+  type UserPreferences,
   type UserRecord,
+  type UserTheme,
   type UserStatus,
 } from "./product-store.js";
 import { runMigrations } from "./postgres-migrations.js";
@@ -47,6 +56,17 @@ interface SessionRow {
   readonly created_at: Date;
   readonly expires_at: Date;
   readonly revoked_at: Date | null;
+}
+
+interface PreferenceRow {
+  readonly user_id: string;
+  readonly locale: string;
+  readonly theme: string;
+  readonly sound_enabled: boolean;
+  readonly history_public: boolean;
+  readonly friend_invites: boolean;
+  readonly show_online_status: boolean;
+  readonly updated_at: Date;
 }
 
 interface MatchRow {
@@ -92,6 +112,21 @@ interface AuditRow {
   readonly created_at: Date;
 }
 
+interface CountRow {
+  readonly total: number | string;
+}
+
+interface StatsRow {
+  readonly completed: number | string;
+  readonly wins: number | string;
+  readonly losses: number | string;
+  readonly draws: number | string;
+}
+
+interface StatsByGameRow extends StatsRow {
+  readonly game: string;
+}
+
 export interface PostgresProductStoreOptions {
   readonly connectionString?: string;
   readonly pool?: Pool;
@@ -121,6 +156,11 @@ const validUserStatus = (value: string): UserStatus => {
   if (value === "active" || value === "suspended" || value === "deactivated")
     return value;
   throw new Error(`資料庫使用者狀態格式錯誤：${value}`);
+};
+
+const validUserTheme = (value: string): UserTheme => {
+  if (value === "system" || value === "light" || value === "dark") return value;
+  throw new Error(`資料庫主題格式錯誤：${value}`);
 };
 
 const validMatchMode = (value: string): MatchMode => {
@@ -195,6 +235,17 @@ const parseSession = (row: SessionRow): SessionRecord => ({
   createdAt: requiredMillis(row.created_at),
   expiresAt: requiredMillis(row.expires_at),
   revokedAt: dateMillis(row.revoked_at),
+});
+
+const parsePreferences = (row: PreferenceRow): UserPreferences => ({
+  userId: row.user_id,
+  locale: row.locale,
+  theme: validUserTheme(row.theme),
+  soundEnabled: row.sound_enabled,
+  historyPublic: row.history_public,
+  friendInvites: row.friend_invites,
+  showOnlineStatus: row.show_online_status,
+  updatedAt: requiredMillis(row.updated_at),
 });
 
 const parseParticipant = (row: ParticipantRow): MatchParticipant => ({
@@ -300,6 +351,89 @@ export class PostgresProductStore implements ProductStore {
     );
     const row = result.rows[0];
     return row ? parseUser(row) : null;
+  }
+
+  async updateUserProfile(
+    id: string,
+    input: UpdateUserProfileInput,
+    at = Date.now(),
+  ): Promise<UserRecord> {
+    const result = await this.pool.query<UserRow>(
+      `
+        UPDATE qiju_users
+        SET display_name = COALESCE($2, display_name), last_active_at = $3
+        WHERE id = $1
+        RETURNING id, display_name, status, created_at, last_active_at
+      `,
+      [
+        id,
+        input.displayName === undefined
+          ? null
+          : normalizedName(input.displayName),
+        new Date(timestamp(at)),
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new ProductStoreNotFoundError(`找不到使用者：${id}`);
+    return parseUser(row);
+  }
+
+  async getUserPreferences(id: string): Promise<UserPreferences> {
+    const result = await this.pool.query<PreferenceRow>(
+      `
+        SELECT user_id, locale, theme, sound_enabled, history_public,
+               friend_invites, show_online_status, updated_at
+        FROM qiju_user_preferences
+        WHERE user_id = $1
+      `,
+      [id],
+    );
+    const row = result.rows[0];
+    if (row) return parsePreferences(row);
+    const user = await this.getUser(id);
+    if (!user) throw new ProductStoreNotFoundError(`找不到使用者：${id}`);
+    return defaultUserPreferences(id, user.createdAt);
+  }
+
+  async updateUserPreferences(
+    id: string,
+    input: UpdateUserPreferencesInput,
+    at = Date.now(),
+  ): Promise<UserPreferences> {
+    const current = await this.getUserPreferences(id);
+    const updated = mergeUserPreferences(current, input, at);
+    const result = await this.pool.query<PreferenceRow>(
+      `
+        INSERT INTO qiju_user_preferences (
+          user_id, locale, theme, sound_enabled, history_public,
+          friend_invites, show_online_status, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (user_id) DO UPDATE SET
+          locale = EXCLUDED.locale,
+          theme = EXCLUDED.theme,
+          sound_enabled = EXCLUDED.sound_enabled,
+          history_public = EXCLUDED.history_public,
+          friend_invites = EXCLUDED.friend_invites,
+          show_online_status = EXCLUDED.show_online_status,
+          updated_at = EXCLUDED.updated_at
+        RETURNING user_id, locale, theme, sound_enabled, history_public,
+                  friend_invites, show_online_status, updated_at
+      `,
+      [
+        updated.userId,
+        updated.locale,
+        updated.theme,
+        updated.soundEnabled,
+        updated.historyPublic,
+        updated.friendInvites,
+        updated.showOnlineStatus,
+        new Date(updated.updatedAt),
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("更新使用者偏好失敗");
+    return parsePreferences(row);
   }
 
   async touchUser(id: string, at = Date.now()): Promise<void> {
@@ -471,6 +605,41 @@ export class PostgresProductStore implements ProductStore {
     return existing;
   }
 
+  async linkMatchParticipant(
+    matchId: string,
+    seat: number,
+    userId: string,
+  ): Promise<MatchParticipant> {
+    const result = await this.pool.query<ParticipantRow>(
+      `
+        UPDATE qiju_match_participants
+        SET user_id = $3
+        WHERE match_id = $1 AND seat = $2
+          AND (user_id IS NULL OR user_id = $3)
+        RETURNING match_id, seat, user_id, display_name, bot, result, joined_at
+      `,
+      [matchId, seat, userId],
+    );
+    const row = result.rows[0];
+    if (row) return parseParticipant(row);
+    const existing = await this.pool.query<ParticipantRow>(
+      `
+        SELECT match_id, seat, user_id, display_name, bot, result, joined_at
+        FROM qiju_match_participants
+        WHERE match_id = $1 AND seat = $2
+      `,
+      [matchId, seat],
+    );
+    const current = existing.rows[0];
+    if (!current)
+      throw new ProductStoreNotFoundError(
+        `找不到對局參與者：${matchId}/${String(seat)}`,
+      );
+    throw new ProductStoreConflictError(
+      `對局參與者已綁定其他使用者：${matchId}/${String(seat)}`,
+    );
+  }
+
   async appendMatchEvent(input: AppendMatchEventInput): Promise<MatchEvent> {
     const match = await this.getMatch(input.matchId);
     if (!match)
@@ -541,6 +710,121 @@ export class PostgresProductStore implements ProductStore {
       [matchId],
     );
     return result.rows.map(parseEvent);
+  }
+
+  async listMatchesForUser(
+    input: ListMatchHistoryInput,
+  ): Promise<MatchHistoryPage> {
+    const page = input.page ?? 1;
+    const pageSize = input.pageSize ?? 20;
+    if (!Number.isSafeInteger(page) || page < 1)
+      throw new Error("歷史頁碼格式錯誤");
+    if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 50)
+      throw new Error("歷史每頁筆數必須介於 1 到 50");
+    const clauses = ["p.user_id = $1", "m.status <> 'active'"];
+    const params: unknown[] = [input.userId];
+    const add = (clause: string, value: unknown): void => {
+      params.push(value);
+      clauses.push(clause.replace("$N", `$${String(params.length)}`));
+    };
+    if (input.game !== undefined) add("m.game = $N", input.game);
+    if (input.mode !== undefined) add("m.mode = $N", input.mode);
+    if (input.result !== undefined) add("p.result = $N", input.result);
+    if (input.from !== undefined) {
+      if (!Number.isFinite(input.from)) throw new Error("歷史起始時間格式錯誤");
+      add("m.started_at >= $N", new Date(input.from));
+    }
+    if (input.to !== undefined) {
+      if (!Number.isFinite(input.to)) throw new Error("歷史結束時間格式錯誤");
+      add("m.started_at <= $N", new Date(input.to));
+    }
+    const where = clauses.join(" AND ");
+    const countResult = await this.pool.query<CountRow>(
+      `
+        SELECT count(*)::int AS total
+        FROM qiju_matches AS m
+        JOIN qiju_match_participants AS p ON p.match_id = m.id
+        WHERE ${where}
+      `,
+      params,
+    );
+    const total = Number(countResult.rows[0]?.total ?? 0);
+    const offset = (page - 1) * pageSize;
+    const matchResult = await this.pool.query<{ id: string }>(
+      `
+        SELECT m.id
+        FROM qiju_matches AS m
+        JOIN qiju_match_participants AS p ON p.match_id = m.id
+        WHERE ${where}
+        ORDER BY m.started_at DESC, m.id DESC
+        LIMIT $${String(params.length + 1)}
+        OFFSET $${String(params.length + 2)}
+      `,
+      [...params, pageSize, offset],
+    );
+    const matches: MatchRecord[] = [];
+    for (const row of matchResult.rows) {
+      const match = await this.getMatch(row.id);
+      if (match) matches.push(match);
+    }
+    return {
+      matches,
+      page,
+      pageSize,
+      total,
+      hasNext: offset + matches.length < total,
+    };
+  }
+
+  async getUserMatchStats(userId: string): Promise<UserMatchStats> {
+    const user = await this.getUser(userId);
+    if (!user) throw new ProductStoreNotFoundError(`找不到使用者：${userId}`);
+    const base = await this.pool.query<StatsRow>(
+      `
+        SELECT
+          count(*)::int AS completed,
+          count(*) FILTER (WHERE p.result = 'win')::int AS wins,
+          count(*) FILTER (WHERE p.result = 'loss')::int AS losses,
+          count(*) FILTER (WHERE p.result = 'draw')::int AS draws
+        FROM qiju_matches AS m
+        JOIN qiju_match_participants AS p ON p.match_id = m.id
+        WHERE p.user_id = $1 AND m.status = 'completed'
+      `,
+      [userId],
+    );
+    const byGame = await this.pool.query<StatsByGameRow>(
+      `
+        SELECT
+          m.game,
+          count(*)::int AS completed,
+          count(*) FILTER (WHERE p.result = 'win')::int AS wins,
+          count(*) FILTER (WHERE p.result = 'loss')::int AS losses,
+          count(*) FILTER (WHERE p.result = 'draw')::int AS draws
+        FROM qiju_matches AS m
+        JOIN qiju_match_participants AS p ON p.match_id = m.id
+        WHERE p.user_id = $1 AND m.status = 'completed'
+        GROUP BY m.game
+        ORDER BY m.game
+      `,
+      [userId],
+    );
+    const row = base.rows[0];
+    const number = (value: number | string | undefined): number =>
+      Number(value ?? 0);
+    return {
+      userId,
+      completed: number(row?.completed),
+      wins: number(row?.wins),
+      losses: number(row?.losses),
+      draws: number(row?.draws),
+      byGame: byGame.rows.map((entry) => ({
+        game: validGame(entry.game),
+        completed: number(entry.completed),
+        wins: number(entry.wins),
+        losses: number(entry.losses),
+        draws: number(entry.draws),
+      })),
+    };
   }
 
   async completeMatch(input: CompleteMatchInput): Promise<MatchRecord> {

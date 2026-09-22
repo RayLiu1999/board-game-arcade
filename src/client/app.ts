@@ -519,6 +519,7 @@ $("#setup-form").onsubmit = async (e) => {
   selected = null;
   if (setupMode === "online") {
     try {
+      await ensureProductSession($("#player-name").value);
       await connect();
       const ws = socket;
       if (!ws) throw new Error("連線尚未建立");
@@ -550,6 +551,7 @@ $("#setup-form").onsubmit = async (e) => {
 $("#join-form").onsubmit = async (e) => {
   e.preventDefault();
   try {
+    await ensureProductSession($("#join-name").value);
     await connect();
     const code = $("#join-code").value.trim().toUpperCase();
     const saved = session.get();
@@ -567,6 +569,20 @@ $("#join-form").onsubmit = async (e) => {
     toast(errorMessage(err));
   }
 };
+async function ensureProductSession(displayName: string): Promise<void> {
+  const response = await fetch("/api/guest-session", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ displayName: displayName.trim() || "訪客棋手" }),
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as {
+      error?: string;
+    } | null;
+    throw new Error(payload?.error ?? "無法建立玩家 session");
+  }
+}
 function connect(): Promise<void> {
   if (socket?.readyState === 1) return Promise.resolve();
   if (connectionPromise) return connectionPromise;

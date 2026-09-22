@@ -45,9 +45,37 @@ const serveFile = async (
   }
 };
 
-export const createStaticHttpServer = (): Server =>
+export interface StaticHttpServerOptions {
+  readonly api?: (
+    request: IncomingMessage,
+    response: ServerResponse,
+  ) => Promise<boolean>;
+}
+
+export const createStaticHttpServer = (
+  options: StaticHttpServerOptions = {},
+): Server =>
   createHttpServer((req, res) => {
-    void serveFile(req, res);
+    if (!options.api) {
+      void serveFile(req, res);
+      return;
+    }
+    void options
+      .api(req, res)
+      .then((handled) => {
+        if (!handled) void serveFile(req, res);
+      })
+      .catch(() => {
+        if (!res.headersSent) {
+          res.writeHead(500, {
+            "Content-Type": "application/json; charset=utf-8",
+            "Cache-Control": "no-store",
+          });
+          res.end(JSON.stringify({ error: "伺服器錯誤" }));
+        } else {
+          res.destroy();
+        }
+      });
   });
 
 export const parsePort = (value: string | undefined): number => {

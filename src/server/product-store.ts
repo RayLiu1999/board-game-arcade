@@ -20,6 +20,32 @@ export interface UserRecord {
   readonly lastActiveAt: number;
 }
 
+export type UserTheme = "system" | "light" | "dark";
+
+export interface UserPreferences {
+  readonly userId: string;
+  readonly locale: string;
+  readonly theme: UserTheme;
+  readonly soundEnabled: boolean;
+  readonly historyPublic: boolean;
+  readonly friendInvites: boolean;
+  readonly showOnlineStatus: boolean;
+  readonly updatedAt: number;
+}
+
+export interface UpdateUserProfileInput {
+  readonly displayName?: string;
+}
+
+export interface UpdateUserPreferencesInput {
+  readonly locale?: string;
+  readonly theme?: UserTheme;
+  readonly soundEnabled?: boolean;
+  readonly historyPublic?: boolean;
+  readonly friendInvites?: boolean;
+  readonly showOnlineStatus?: boolean;
+}
+
 export interface CreateUserInput {
   readonly id?: string;
   readonly displayName: string;
@@ -112,6 +138,44 @@ export interface AppendMatchEventInput {
   readonly schemaVersion?: number;
 }
 
+export type MatchHistoryResult = "win" | "loss" | "draw";
+
+export interface ListMatchHistoryInput {
+  readonly userId: string;
+  readonly game?: GameId;
+  readonly mode?: MatchMode;
+  readonly result?: MatchHistoryResult;
+  readonly from?: number;
+  readonly to?: number;
+  readonly page?: number;
+  readonly pageSize?: number;
+}
+
+export interface MatchHistoryPage {
+  readonly matches: readonly MatchRecord[];
+  readonly page: number;
+  readonly pageSize: number;
+  readonly total: number;
+  readonly hasNext: boolean;
+}
+
+export interface UserMatchStatsByGame {
+  readonly game: GameId;
+  readonly completed: number;
+  readonly wins: number;
+  readonly losses: number;
+  readonly draws: number;
+}
+
+export interface UserMatchStats {
+  readonly userId: string;
+  readonly completed: number;
+  readonly wins: number;
+  readonly losses: number;
+  readonly draws: number;
+  readonly byGame: readonly UserMatchStatsByGame[];
+}
+
 export interface CompleteMatchInput {
   readonly matchId: string;
   readonly outcome: MatchOutcome;
@@ -151,6 +215,17 @@ export interface RecordAuditInput {
 export interface UserStore {
   createUser(input: CreateUserInput): Promise<UserRecord>;
   getUser(id: string): Promise<UserRecord | null>;
+  updateUserProfile(
+    id: string,
+    input: UpdateUserProfileInput,
+    at?: number,
+  ): Promise<UserRecord>;
+  getUserPreferences(id: string): Promise<UserPreferences>;
+  updateUserPreferences(
+    id: string,
+    input: UpdateUserPreferencesInput,
+    at?: number,
+  ): Promise<UserPreferences>;
   touchUser(id: string, at?: number): Promise<void>;
   setUserStatus(
     id: string,
@@ -171,8 +246,15 @@ export interface MatchStore {
   addMatchParticipant(
     input: AddMatchParticipantInput,
   ): Promise<MatchParticipant>;
+  linkMatchParticipant(
+    matchId: string,
+    seat: number,
+    userId: string,
+  ): Promise<MatchParticipant>;
   appendMatchEvent(input: AppendMatchEventInput): Promise<MatchEvent>;
   listMatchEvents(matchId: string): Promise<MatchEvent[]>;
+  listMatchesForUser(input: ListMatchHistoryInput): Promise<MatchHistoryPage>;
+  getUserMatchStats(userId: string): Promise<UserMatchStats>;
   completeMatch(input: CompleteMatchInput): Promise<MatchRecord>;
   abortMatch(input: AbortMatchInput): Promise<MatchRecord>;
 }
@@ -219,9 +301,81 @@ const timestamp = (value: number | undefined): number => {
   return result;
 };
 
+export const defaultUserPreferences = (
+  userId: string,
+  updatedAt = Date.now(),
+): UserPreferences => ({
+  userId,
+  locale: "zh-Hant",
+  theme: "system",
+  soundEnabled: true,
+  historyPublic: false,
+  friendInvites: true,
+  showOnlineStatus: true,
+  updatedAt,
+});
+
+const locale = (value: string): string => {
+  const normalized = value.trim();
+  if (!/^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{2,8})?$/.test(normalized))
+    throw new Error("語言格式錯誤");
+  return normalized;
+};
+
+const theme = (value: unknown): UserTheme => {
+  if (value === "system" || value === "light" || value === "dark") return value;
+  throw new Error("主題格式錯誤");
+};
+
+export const mergeUserPreferences = (
+  current: UserPreferences,
+  input: UpdateUserPreferencesInput,
+  at = Date.now(),
+): UserPreferences => ({
+  ...current,
+  ...(input.locale === undefined ? {} : { locale: locale(input.locale) }),
+  ...(input.theme === undefined ? {} : { theme: theme(input.theme) }),
+  ...(input.soundEnabled === undefined
+    ? {}
+    : { soundEnabled: input.soundEnabled }),
+  ...(input.historyPublic === undefined
+    ? {}
+    : { historyPublic: input.historyPublic }),
+  ...(input.friendInvites === undefined
+    ? {}
+    : { friendInvites: input.friendInvites }),
+  ...(input.showOnlineStatus === undefined
+    ? {}
+    : { showOnlineStatus: input.showOnlineStatus }),
+  updatedAt: timestamp(at),
+});
+
 const positiveInteger = (value: number, label: string): number => {
   if (!Number.isSafeInteger(value) || value < 1)
     throw new Error(`${label}格式錯誤`);
+  return value;
+};
+
+const historyPage = (value: number | undefined): number => {
+  const result = value ?? 1;
+  if (!Number.isSafeInteger(result) || result < 1)
+    throw new Error("歷史頁碼格式錯誤");
+  return result;
+};
+
+const historyPageSize = (value: number | undefined): number => {
+  const result = value ?? 20;
+  if (!Number.isSafeInteger(result) || result < 1 || result > 50)
+    throw new Error("歷史每頁筆數必須介於 1 到 50");
+  return result;
+};
+
+const historyTime = (
+  value: number | undefined,
+  label: string,
+): number | null => {
+  if (value === undefined) return null;
+  if (!Number.isFinite(value)) throw new Error(`${label}格式錯誤`);
   return value;
 };
 
@@ -257,6 +411,7 @@ const applyParticipantResults = (
 
 export class MemoryProductStore implements ProductStore {
   private readonly users = new Map<string, UserRecord>();
+  private readonly preferences = new Map<string, UserPreferences>();
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly matches = new Map<string, MatchRecord>();
   private readonly events = new Map<string, Map<number, MatchEvent>>();
@@ -284,12 +439,60 @@ export class MemoryProductStore implements ProductStore {
         lastActiveAt: createdAt,
       };
       this.users.set(id, clone(user));
+      this.preferences.set(id, defaultUserPreferences(id, createdAt));
       return clone(user);
     });
   }
 
   getUser(id: string): Promise<UserRecord | null> {
     return Promise.resolve(clone(this.users.get(id) ?? null));
+  }
+
+  updateUserProfile(
+    id: string,
+    input: UpdateUserProfileInput,
+    at?: number,
+  ): Promise<UserRecord> {
+    return Promise.resolve().then(() => {
+      const user = this.users.get(id);
+      if (!user) throw new ProductStoreNotFoundError(`找不到使用者：${id}`);
+      const updated = {
+        ...user,
+        ...(input.displayName === undefined
+          ? {}
+          : { displayName: displayName(input.displayName) }),
+        lastActiveAt: timestamp(at),
+      };
+      this.users.set(id, updated);
+      return clone(updated);
+    });
+  }
+
+  getUserPreferences(id: string): Promise<UserPreferences> {
+    return Promise.resolve().then(() => {
+      const user = this.users.get(id);
+      if (!user) throw new ProductStoreNotFoundError(`找不到使用者：${id}`);
+      const current =
+        this.preferences.get(id) ?? defaultUserPreferences(id, user.createdAt);
+      this.preferences.set(id, clone(current));
+      return clone(current);
+    });
+  }
+
+  updateUserPreferences(
+    id: string,
+    input: UpdateUserPreferencesInput,
+    at?: number,
+  ): Promise<UserPreferences> {
+    return Promise.resolve().then(() => {
+      const user = this.users.get(id);
+      if (!user) throw new ProductStoreNotFoundError(`找不到使用者：${id}`);
+      const current =
+        this.preferences.get(id) ?? defaultUserPreferences(id, user.createdAt);
+      const updated = mergeUserPreferences(current, input, at);
+      this.preferences.set(id, clone(updated));
+      return clone(updated);
+    });
   }
 
   touchUser(id: string, at?: number): Promise<void> {
@@ -440,6 +643,38 @@ export class MemoryProductStore implements ProductStore {
     });
   }
 
+  linkMatchParticipant(
+    matchId: string,
+    seat: number,
+    userId: string,
+  ): Promise<MatchParticipant> {
+    return Promise.resolve().then(() => {
+      if (!this.users.has(userId))
+        throw new ProductStoreNotFoundError(`找不到使用者：${userId}`);
+      const match = this.matches.get(matchId);
+      if (!match) throw new ProductStoreNotFoundError(`找不到對局：${matchId}`);
+      const participant = match.participants.find(
+        (entry) => entry.seat === seat,
+      );
+      if (!participant)
+        throw new ProductStoreNotFoundError(
+          `找不到對局參與者：${matchId}/${String(seat)}`,
+        );
+      if (participant.userId !== null && participant.userId !== userId)
+        throw new ProductStoreConflictError(
+          `對局參與者已綁定其他使用者：${matchId}/${String(seat)}`,
+        );
+      const updatedParticipant = { ...participant, userId };
+      this.matches.set(matchId, {
+        ...match,
+        participants: match.participants.map((entry) =>
+          entry.seat === seat ? updatedParticipant : entry,
+        ),
+      });
+      return clone(updatedParticipant);
+    });
+  }
+
   appendMatchEvent(input: AppendMatchEventInput): Promise<MatchEvent> {
     return Promise.resolve().then(() => {
       if (!this.matches.has(input.matchId))
@@ -482,6 +717,92 @@ export class MemoryProductStore implements ProductStore {
       return [...(this.events.get(matchId)?.values() ?? [])]
         .sort((left, right) => left.sequence - right.sequence)
         .map(clone);
+    });
+  }
+
+  listMatchesForUser(input: ListMatchHistoryInput): Promise<MatchHistoryPage> {
+    return Promise.resolve().then(() => {
+      if (!this.users.has(input.userId))
+        throw new ProductStoreNotFoundError(`找不到使用者：${input.userId}`);
+      const page = historyPage(input.page);
+      const pageSize = historyPageSize(input.pageSize);
+      const from = historyTime(input.from, "歷史起始時間");
+      const to = historyTime(input.to, "歷史結束時間");
+      const filtered = [...this.matches.values()]
+        .filter(
+          (match) =>
+            match.status !== "active" &&
+            match.participants.some(
+              (participant) =>
+                participant.userId === input.userId &&
+                (input.result === undefined ||
+                  participant.result === input.result),
+            ) &&
+            (input.game === undefined || match.game === input.game) &&
+            (input.mode === undefined || match.mode === input.mode) &&
+            (from === null || match.startedAt >= from) &&
+            (to === null || match.startedAt <= to),
+        )
+        .sort(
+          (left, right) =>
+            right.startedAt - left.startedAt || right.id.localeCompare(left.id),
+        );
+      const offset = (page - 1) * pageSize;
+      const matches = filtered.slice(offset, offset + pageSize).map(clone);
+      return {
+        matches,
+        page,
+        pageSize,
+        total: filtered.length,
+        hasNext: offset + matches.length < filtered.length,
+      };
+    });
+  }
+
+  getUserMatchStats(userId: string): Promise<UserMatchStats> {
+    return Promise.resolve().then(() => {
+      if (!this.users.has(userId))
+        throw new ProductStoreNotFoundError(`找不到使用者：${userId}`);
+      const byGame = new Map<GameId, UserMatchStatsByGame>();
+      let completed = 0;
+      let wins = 0;
+      let losses = 0;
+      let draws = 0;
+      for (const match of this.matches.values()) {
+        if (match.status !== "completed") continue;
+        const participant = match.participants.find(
+          (entry) => entry.userId === userId,
+        );
+        if (!participant) continue;
+        completed += 1;
+        if (participant.result === "win") wins += 1;
+        else if (participant.result === "loss") losses += 1;
+        else if (participant.result === "draw") draws += 1;
+        const current = byGame.get(match.game) ?? {
+          game: match.game,
+          completed: 0,
+          wins: 0,
+          losses: 0,
+          draws: 0,
+        };
+        byGame.set(match.game, {
+          ...current,
+          completed: current.completed + 1,
+          wins: current.wins + (participant.result === "win" ? 1 : 0),
+          losses: current.losses + (participant.result === "loss" ? 1 : 0),
+          draws: current.draws + (participant.result === "draw" ? 1 : 0),
+        });
+      }
+      return {
+        userId,
+        completed,
+        wins,
+        losses,
+        draws,
+        byGame: [...byGame.values()].sort((left, right) =>
+          left.game.localeCompare(right.game),
+        ),
+      };
     });
   }
 

@@ -11,7 +11,7 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: "PORT=4173 npm start",
+    command: "QIJU_ROOM_STORE=memory PORT=4173 npm start",
     url: "http://127.0.0.1:4173",
     reuseExistingServer: !process.env.CI,
     timeout: 30_000,

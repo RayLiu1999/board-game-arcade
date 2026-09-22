@@ -18,8 +18,8 @@
 - P0 的 PostgreSQL `RoomStore`、一般棋類 snapshot、重啟恢復、token hash 與 TTL 已完成。
 - P1 的日麻 session snapshot／restore 已完成；多實例 Redis 仍保留到需要時再做。
 - Docker Compose 已能先執行 migration，再啟動應用程式；映像也可發布至 GHCR。
-- 線上對局仍以 guest、房間代碼與重連 token 為主，尚未有正式帳號、好友、對局歷史、積分或排行榜。
-- PostgreSQL 目前主要保存進行中的房間狀態，不等於完整的玩家帳號資料庫或永久對局歷史。
+- P3-A／P3-B 已補上 guest session、自己的對局歷史 API、個人偏好與基本統計；正式帳號合併、好友、積分與排行榜仍未開始。
+- PostgreSQL 現在同時保存進行中的房間、產品化 match／事件與個人偏好，但仍不等於完整的社交與競技資料庫。
 
 P3 的目標，是把「可以玩的一組棋類」提升成「玩家願意重複回來、可以累積紀錄、能公平競爭、也方便營運的產品」。因此 P3 的重點不是只增加棋規，而是補上身份、比賽、留存、可及性與營運能力。
 
@@ -512,6 +512,17 @@ P3-A 的第一個後端切片已落地：
 - 已補上 memory、真實 PostgreSQL adapter、事件重送、一般棋類／日麻 server restart 與 E2E 驗證。
 
 本切片刻意尚未加入 history API、登入 cookie／WebSocket handshake、公開觀戰或 rating；這些會在 P3-B／P3-C 以現有 user、session、match 與事件契約為基礎接上，避免先把房間 token 當成長期產品身份。
+
+### P3-B 目前實作狀態（2026-09-22）
+
+P3-B 的第一個可用後端切片已完成：
+
+- 線上模式會建立 HttpOnly guest session；WebSocket handshake 會把有效 session 綁到新加入的房間玩家，既有匿名 seat 也可用原本的 room token 透過 `/api/me/claim-room` 明確認領。
+- 提供 `/api/me` 個人資料與偏好更新、`/api/me/matches` 分頁歷史查詢、棋種／模式／結果／日期篩選，以及 `/api/me/stats` 基本勝負統計。
+- 個人偏好獨立保存於 `qiju_user_preferences`，不混入房間 snapshot；歷史 API 只回傳目前使用者有權查看的對局摘要，不回傳 user ID 或日麻私有事件。
+- memory 與 PostgreSQL adapter 都涵蓋偏好、歷史、統計與 participant 綁定；補上 HTTP、WebSocket、guest claim 與真實 PostgreSQL 行為測試。
+
+本切片尚未加入外部登入／正式帳號合併、好友與封鎖、公開歷史頁面、rating 或排行榜；這些仍依序留在 P3-1 後續與 P3-C，避免把 guest session 誤當成完整帳號系統。
 
 ## P3 的整體完成定義
 

@@ -7,7 +7,7 @@
 目前基準版本：
 
 - Git commit：`91630b1 Initial commit: Qiju board game arcade`
-- 測試：`npm test` 共 58 個測試，本機環境通常為 56 passed、2 個 PostgreSQL tests skipped；CI 有 PostgreSQL service 會執行完整測試；`npm run test:e2e` 通過 1 個瀏覽器流程
+- 測試：`npm test` 目前共 66 個測試；設定專用 PostgreSQL 測試資料庫時會執行完整 adapter 與 server restart cases；`npm run test:e2e` 通過 1 個瀏覽器流程
 - 執行環境：Node.js 22 或更新版本
 
 ### TS-first 決策
@@ -498,7 +498,7 @@ P0 程式碼已落地：有設定 `DATABASE_URL` 時使用線上 PostgreSQL 作�
    - 保存 `expires_at`，於啟動及定期清理過期、且無活躍連線的房間。
    - 使用與正式環境相同的 PostgreSQL 引擎驗證建立、落子、重啟恢復、過期清理與錯誤並發案例。
 
-P0 的程式碼完成條件已具備：一般棋類房間在 Node 程序重啟後可恢復並繼續遊玩，敏感 token 不以明文存於資料庫，且有 PostgreSQL adapter 與完整 server restart integration test。GitHub Actions 已啟動 PostgreSQL service 執行這兩項真實資料庫測試；本機若要執行，請在專用測試資料庫設定 `QIJU_TEST_DATABASE_URL`。
+P0 的程式碼完成條件已具備：一般棋類房間在 Node 程序重啟後可恢復並繼續遊玩，敏感 token 不以明文存於資料庫，且有 PostgreSQL adapter 與完整 server restart integration test。GitHub Actions 已啟動 PostgreSQL service 執行這些真實資料庫測試；本機若要執行，請在專用測試資料庫設定 `QIJU_TEST_DATABASE_URL`。
 
 ##### P1 目前進度：第 4 項完成，第 5 項暫緩
 

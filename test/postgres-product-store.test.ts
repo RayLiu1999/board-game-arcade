@@ -21,11 +21,15 @@ if (!databaseUrl) {
     const cleanup = new Pool({ connectionString: databaseUrl });
     const userId = randomUUID();
     const matchId = randomUUID();
+    const secondMatchId = randomUUID();
     const token = createSessionToken();
 
     t.after(async () => {
       await store.close();
       await cleanup.query("DELETE FROM qiju_matches WHERE id = $1", [matchId]);
+      await cleanup.query("DELETE FROM qiju_matches WHERE id = $1", [
+        secondMatchId,
+      ]);
       await cleanup.query("DELETE FROM qiju_users WHERE id = $1", [userId]);
       await cleanup.end();
     });
@@ -42,6 +46,13 @@ if (!databaseUrl) {
       createdAt: 1_700_000_000_001,
       expiresAt: 1_700_000_100_000,
     });
+    assert.equal((await store.getUserPreferences(user.id)).theme, "system");
+    const preferences = await store.updateUserPreferences(user.id, {
+      theme: "dark",
+      soundEnabled: false,
+    });
+    assert.equal(preferences.theme, "dark");
+    assert.equal(preferences.soundEnabled, false);
     assert.notEqual(session.tokenHash, token);
     assert.equal(
       (await store.findActiveSession(token, 1_700_000_000_002))?.userId,
@@ -79,6 +90,49 @@ if (!databaseUrl) {
     assert.equal(completed.status, "completed");
     assert.equal(completed.participants[0]?.result, "win");
     assert.equal((await store.listMatchEvents(match.id)).length, 1);
+
+    const secondMatch = await store.createMatch({
+      id: secondMatchId,
+      roomCode: "DB5678",
+      game: "gomoku",
+      mode: "friend",
+      startedAt: 1_700_000_000_103,
+    });
+    await store.addMatchParticipant({
+      matchId: secondMatch.id,
+      seat: 0,
+      userId: user.id,
+      displayName: user.displayName,
+      bot: false,
+    });
+    await store.addMatchParticipant({
+      matchId: secondMatch.id,
+      seat: 1,
+      displayName: "另一位玩家",
+      bot: false,
+    });
+    await store.completeMatch({
+      matchId: secondMatch.id,
+      outcome: { winnerSeat: 1, reason: "五連線" },
+      completedAt: 1_700_000_000_104,
+    });
+    const history = await store.listMatchesForUser({
+      userId: user.id,
+      result: "loss",
+      pageSize: 1,
+    });
+    assert.equal(history.total, 1);
+    assert.equal(history.matches[0]?.id, secondMatch.id);
+    const stats = await store.getUserMatchStats(user.id);
+    assert.deepEqual(
+      {
+        completed: stats.completed,
+        wins: stats.wins,
+        losses: stats.losses,
+        draws: stats.draws,
+      },
+      { completed: 2, wins: 1, losses: 1, draws: 0 },
+    );
     assert.equal(await store.revokeSession(token, 1_700_000_000_007), true);
     assert.equal(await store.findActiveSession(token, 1_700_000_000_008), null);
   });

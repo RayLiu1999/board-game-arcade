@@ -5,7 +5,9 @@ import type { Server } from "node:http";
 import { createStaticHttpServer, parsePort } from "./http-server.js";
 import { RoomManager } from "./room-manager.js";
 import type { RoomStore } from "./room-store.js";
+import { ProductIdentityService } from "./product-identity.js";
 import type { ProductStore } from "./product-store.js";
+import { createProductHttpHandler } from "./product-http.js";
 import {
   createConfiguredProductStore,
   createConfiguredRoomStore,
@@ -30,6 +32,7 @@ export interface ServerBundle {
   readonly wss: ReturnType<typeof attachWebSocketServer>;
   readonly rooms: RoomManager["rooms"];
   readonly productStore: RoomManager["productStore"];
+  readonly identity: ProductIdentityService;
   readonly ready: Promise<void>;
 }
 
@@ -39,13 +42,25 @@ export function createServer(options: ServerOptions = {}): ServerBundle {
     ...(options.productStore ? { productStore: options.productStore } : {}),
   });
   const { rooms } = roomManager;
-  const server = createStaticHttpServer();
-  const wss = attachWebSocketServer(server, roomManager);
+  const identity = new ProductIdentityService(
+    roomManager.productStore,
+    roomManager.productStore,
+  );
+  const server = createStaticHttpServer({
+    api: createProductHttpHandler({
+      identity,
+      productStore: roomManager.productStore,
+      claimRoom: (code, roomToken, userId) =>
+        roomManager.claimPlayerIdentity(code, roomToken, userId),
+    }),
+  });
+  const wss = attachWebSocketServer(server, roomManager, identity);
   return {
     server,
     wss,
     rooms,
     productStore: roomManager.productStore,
+    identity,
     ready: roomManager.ready,
   };
 }
