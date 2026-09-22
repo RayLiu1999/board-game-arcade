@@ -17,7 +17,7 @@ npm start
 PORT=8080 npm start
 ```
 
-專案會自動載入根目錄的 `.env`。第一次設定可參考 `.env.example`；請把實際的 PostgreSQL 連線字串填入 `.env`，不要提交該檔案。`DATABASE_URL` 用於正式啟動時保存一般棋類房間，`QIJU_TEST_DATABASE_URL` 用於 PostgreSQL 整合測試，應指向獨立的測試資料庫：
+專案會自動載入根目錄的 `.env`。第一次設定可參考 `.env.example`；請把實際的 PostgreSQL 連線字串填入 `.env`，不要提交該檔案。`DATABASE_URL` 用於正式啟動時保存房間 snapshot、對局結果與最小事件，`QIJU_TEST_DATABASE_URL` 用於 PostgreSQL 整合測試，應指向獨立的測試資料庫：
 
 ```sh
 # .env
@@ -72,13 +72,13 @@ docker run --rm --name qiju \
 
 若 GHCR package 設為 private，部署主機需先以具有 `read:packages` 權限的 GitHub token 登入 `ghcr.io`；公開 package 則可直接 pull。Workflow 使用 GitHub Actions 內建的 `GITHUB_TOKEN` 與 `packages: write`，不需要把 registry token 寫進 repository。
 
-正式啟動時若設定 `DATABASE_URL`，線上房間會使用 PostgreSQL 保存一般棋類房間；未設定時使用 memory store，適合本機開發。可用 `QIJU_ROOM_STORE=memory` 強制使用 memory store：
+正式啟動時若設定 `DATABASE_URL`，線上房間與產品化對局資料會使用 PostgreSQL；未設定時使用 memory store，適合本機開發。可用 `QIJU_ROOM_STORE=memory` 強制使用 memory store：
 
 ```sh
 DATABASE_URL='postgresql://user:password@host:5432/qiju' npm start
 ```
 
-PostgreSQL migration 會在伺服器啟動時自動初始化。日麻的 live session 尚未持久化，伺服器重啟後仍需重新建立日麻房間。
+PostgreSQL migration 會在伺服器啟動時自動初始化。日麻 live session 會以版本化 snapshot 保存，伺服器重啟後需真人重新連線才會繼續；已完成的一般棋類與日麻對局會另外保存 match、參與者與最小事件。
 
 ## 棋種與規則
 
@@ -140,7 +140,7 @@ npm run test:e2e
 npm run test:postgres # 需設定 QIJU_TEST_DATABASE_URL
 ```
 
-`npm test` 使用 Node 內建測試執行器，涵蓋棋規（含將棋打入／升變／打步詰）、七種棋的規則契約、可重現走訪、fast-check 合法路徑與 reachable random positions 測試、協定訊息邊界、日麻合法選項／無役與振聽／符番／結算／暗牌隔離、AI 合法走法、WebSocket 兩端同步、非法／過期落子、滿房、斷線重連、認輸、再戰與 HTTP 檔案邊界，也包含 PostgreSQL adapter 與重啟恢復測試（未設定專用 DB 時各 1 項 skip）。`npm run test:postgres` 會執行兩項需要真實 PostgreSQL 的測試，請使用獨立測試資料庫設定 `QIJU_TEST_DATABASE_URL`。`npm run test:e2e` 會先建置瀏覽器 bundle，再用 Playwright 驗證建立房間、加入房間與落子同步。整合測試會在本機開啟隨機連接埠；E2E 會啟動固定的 4173 連接埠。
+`npm test` 使用 Node 內建測試執行器，涵蓋棋規（含將棋打入／升變／打步詰）、七種棋的規則契約、可重現走訪、fast-check 合法路徑與 reachable random positions 測試、協定訊息邊界、日麻合法選項／無役與振聽／符番／結算／暗牌隔離、AI 合法走法、WebSocket 兩端同步、非法／過期落子、滿房、斷線重連、認輸、再戰與 HTTP 檔案邊界，也包含 PostgreSQL adapter、identity/session、match event idempotency 與重啟恢復測試（未設定專用 DB 時各 1 項 skip）。`npm run test:postgres` 會執行需要真實 PostgreSQL 的 adapter 與 server restart 測試，請使用獨立測試資料庫設定 `QIJU_TEST_DATABASE_URL`。`npm run test:e2e` 會先建置瀏覽器 bundle，再用 Playwright 驗證建立房間、加入房間與落子同步。整合測試會在本機開啟隨機連接埠；E2E 會啟動固定的 4173 連接埠。
 
 ## 程式結構
 
@@ -154,7 +154,14 @@ src/server/room-types.ts 房間、socket 與玩家 domain type
 src/server/room-store.ts 持久化 snapshot contract 與 memory store
 src/server/postgres-room-store.ts PostgreSQL migration、查詢與 revision CAS
 src/server/room-store-factory.ts 依環境選擇 PostgreSQL 或 memory store
+src/server/postgres-product-store.ts PostgreSQL identity、match、event 與 audit adapter
+src/server/product-store.ts       User／Session／Match／Audit abstraction 與 memory adapter
+src/server/product-identity.ts    guest identity、session authentication 與撤銷
+src/server/product-security.ts    session token 產生、hash 與 constant-time 比對
+src/server/postgres-migrations.ts 共用 PostgreSQL migration runner
 src/server/migrations/001-room-store.sql 房間與玩家資料表 migration
+src/server/migrations/002-riichi-room-store.sql 日麻 snapshot 欄位 migration
+src/server/migrations/003-product-foundation.sql identity、match、event 與 audit migration
 src/shared/engine.ts     一般棋類共用規則與狀態轉移
 src/shared/shogi.ts      將棋規則與持駒
 src/shared/protocol.ts   WebSocket 訊息型別與 runtime parser

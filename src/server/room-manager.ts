@@ -23,12 +23,20 @@ import {
   type RoomSnapshot,
   type RoomStore,
 } from "./room-store.js";
+import {
+  MATCH_EVENT_SCHEMA_VERSION,
+  MemoryProductStore,
+  type AppendMatchEventInput,
+  type MatchOutcome,
+  type ProductStore,
+} from "./product-store.js";
 
 export type SendMessage = (socket: ClientSocket, data: unknown) => void;
 
 export interface RoomManagerOptions {
   sendMessage?: SendMessage;
   store?: RoomStore;
+  productStore?: ProductStore;
   now?: () => number;
 }
 
@@ -52,6 +60,7 @@ export class RoomManager {
 
   private readonly sendMessage: SendMessage;
   private readonly store: RoomStore;
+  readonly productStore: ProductStore;
   private readonly now: () => number;
   private readonly roomLocks = new Map<string, Promise<void>>();
   private readonly persistenceQueues = new Map<string, Promise<void>>();
@@ -63,12 +72,14 @@ export class RoomManager {
   constructor(options: RoomManagerOptions = {}) {
     this.sendMessage = options.sendMessage ?? send;
     this.store = options.store ?? new MemoryRoomStore();
+    this.productStore = options.productStore ?? new MemoryProductStore();
     this.now = options.now ?? Date.now;
     this.ready = this.restore();
   }
 
   private async restore(): Promise<void> {
     await this.store.initialize();
+    await this.productStore.initialize();
     const now = this.now();
     await this.store.pruneExpired(now, []);
     const snapshots = await this.store.load(now);
@@ -80,7 +91,10 @@ export class RoomManager {
       )
         throw new Error(`房間 ${snapshot.code} 缺少日麻 session snapshot`);
       const room = restore(snapshot);
+      const previousMatchId = room.matchId;
+      await this.ensureMatch(room);
       this.rooms.set(snapshot.code, room);
+      if (room.matchId !== previousMatchId) await this.persistNow(room);
       if (snapshot.state.game === "riichi" && snapshot.riichi) {
         room.session = this.createRiichiSession(room, snapshot.riichi);
         room.session.pause(true);
@@ -98,6 +112,7 @@ export class RoomManager {
               name: player.name,
               tokenHash: player.tokenHash,
               bot: Boolean(player.bot),
+              ...(player.userId === undefined ? {} : { userId: player.userId }),
             }
           : null,
       ),
@@ -106,9 +121,112 @@ export class RoomManager {
       revision: room.revision,
       touched: room.touched,
       expiresAt: room.expiresAt,
+      ...(room.matchId === undefined ? {} : { matchId: room.matchId }),
+      eventSequence: room.eventSequence,
     };
     if (room.session) snapshot.riichi = room.session.snapshot();
     return snapshot;
+  }
+
+  private async ensureMatch(room: Room): Promise<void> {
+    const existing = room.matchId
+      ? await this.productStore.getMatch(room.matchId)
+      : null;
+    if (!existing) {
+      const match = await this.productStore.createMatch({
+        roomCode: room.code,
+        game: room.state.game,
+        mode: "friend",
+        startedAt: room.touched,
+      });
+      room.matchId = match.id;
+      room.eventSequence = 0;
+      room.pendingEvents = [];
+    }
+    if (!Number.isSafeInteger(room.eventSequence) || room.eventSequence < 0)
+      room.eventSequence = 0;
+    await this.syncParticipants(room);
+  }
+
+  async syncParticipants(room: Room): Promise<void> {
+    if (!room.matchId) return;
+    for (const [seat, player] of room.players.entries()) {
+      if (!player) continue;
+      await this.productStore.addMatchParticipant({
+        matchId: room.matchId,
+        seat,
+        userId: player.userId ?? null,
+        displayName: player.name,
+        bot: Boolean(player.bot),
+        joinedAt: room.touched,
+      });
+    }
+  }
+
+  recordMatchEvent(
+    room: Room,
+    input: Omit<AppendMatchEventInput, "matchId" | "sequence">,
+  ): void {
+    if (!room.matchId) return;
+    room.eventSequence += 1;
+    room.pendingEvents.push({
+      matchId: room.matchId,
+      sequence: room.eventSequence,
+      eventType: input.eventType,
+      actorSeat: input.actorSeat ?? null,
+      payload: structuredClone(input.payload),
+      createdAt: input.createdAt ?? this.now(),
+      schemaVersion: input.schemaVersion ?? MATCH_EVENT_SCHEMA_VERSION,
+    });
+  }
+
+  async beginRematch(room: Room): Promise<void> {
+    await this.completeMatchIfDone(room);
+    if (room.state.game === "riichi") {
+      room.session?.close();
+      room.session = null;
+    } else {
+      room.state = createGame(room.state.game, room.state.rows);
+    }
+    const match = await this.productStore.createMatch({
+      roomCode: room.code,
+      game: room.state.game,
+      mode: "friend",
+      startedAt: this.now(),
+    });
+    room.matchId = match.id;
+    room.eventSequence = 0;
+    room.pendingEvents = [];
+    await this.syncParticipants(room);
+  }
+
+  private matchOutcome(room: Room): MatchOutcome | null {
+    if (room.state.game === "riichi") {
+      if (!room.session?.done) return null;
+      const result = room.session.result;
+      const winnerSeat = result?.rank?.indexOf(1) ?? -1;
+      return {
+        winnerSeat: winnerSeat >= 0 ? winnerSeat : null,
+        reason: result?.type ?? "完成",
+        ...(result?.scores ? { scores: [...result.scores] } : {}),
+      };
+    }
+    if (room.state.winner === null) return null;
+    return {
+      winnerSeat:
+        room.state.winner === 0 ? null : room.state.winner === 1 ? 0 : 1,
+      reason: room.state.reason,
+    };
+  }
+
+  private async completeMatchIfDone(room: Room): Promise<void> {
+    const outcome = this.matchOutcome(room);
+    if (!room.matchId || !outcome) return;
+    await this.productStore.completeMatch({
+      matchId: room.matchId,
+      outcome,
+      completedAt: this.now(),
+    });
   }
 
   touch(room: Room): void {
@@ -125,8 +243,13 @@ export class RoomManager {
   }
 
   private async persistNow(room: Room): Promise<void> {
+    const pendingEvents = [...room.pendingEvents];
+    for (const event of pendingEvents)
+      await this.productStore.appendMatchEvent(event);
+    await this.completeMatchIfDone(room);
     const snapshot = this.snapshot(room);
     room.revision = await this.store.update(snapshot, room.revision);
+    room.pendingEvents.splice(0, pendingEvents.length);
   }
 
   private enqueuePersistence(room: Room): Promise<void> {
@@ -262,6 +385,14 @@ export class RoomManager {
         : null,
       ply: session.revision,
     };
+    this.recordMatchEvent(room, {
+      eventType: "riichi.public",
+      payload: {
+        revision: session.revision,
+        activeType: session.activeType,
+        history: session.history.at(-1)?.label ?? null,
+      },
+    });
     this.touch(room);
     this.broadcast(room);
     if (session.activeType === "kaiju") return;
@@ -348,7 +479,10 @@ export class RoomManager {
         expiresAt: this.now() + ROOM_TTL_MS,
         revision: 0,
         session: null,
+        eventSequence: 0,
+        pendingEvents: [],
       };
+      await this.ensureMatch(room);
       await this.createPersistentRoom(room);
       this.rooms.set(code, room);
       index = 0;
@@ -380,12 +514,16 @@ export class RoomManager {
     room.players[index] = {
       name,
       tokenHash: existing?.tokenHash ?? hashRoomToken(token),
+      ...(existing?.userId === undefined && socket.userId === undefined
+        ? {}
+        : { userId: existing?.userId ?? socket.userId }),
       socket,
       ...(existing?.bot ? { bot: true } : {}),
     };
     socket.room = room.code;
     socket.side = roomSide(room.state, index);
     this.touch(room);
+    await this.syncParticipants(room);
     await this.persist(room);
     this.sendMessage(socket, {
       type: "joined",
@@ -415,6 +553,12 @@ export class RoomManager {
           now >= room.expiresAt
         ) {
           room.session?.close();
+          if (room.matchId)
+            await this.productStore.abortMatch({
+              matchId: room.matchId,
+              reason: "room_expired",
+              abortedAt: now,
+            });
           this.rooms.delete(code);
           await this.store.delete(code);
         }
@@ -436,6 +580,7 @@ export class RoomManager {
     await this.waitForPendingOperations();
     for (const room of this.rooms.values()) room.session?.close();
     await this.store.close();
+    await this.productStore.close();
   }
 
   private assertOpen(): void {
@@ -467,6 +612,7 @@ const restore = (snapshot: RoomSnapshot): Room => ({
           name: player.name,
           tokenHash: player.tokenHash,
           bot: player.bot,
+          ...(player.userId === undefined ? {} : { userId: player.userId }),
           socket: null,
         }
       : null,
@@ -477,4 +623,7 @@ const restore = (snapshot: RoomSnapshot): Room => ({
   expiresAt: snapshot.expiresAt,
   revision: snapshot.revision,
   session: null,
+  ...(snapshot.matchId === undefined ? {} : { matchId: snapshot.matchId }),
+  eventSequence: snapshot.eventSequence ?? 0,
+  pendingEvents: [],
 });

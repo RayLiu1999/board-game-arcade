@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { Pool } from "pg";
 import { WebSocket, type RawData } from "ws";
 
+import { PostgresProductStore } from "../src/server/postgres-product-store.js";
 import { createServer } from "../src/server/server.js";
 import { PostgresRoomStore } from "../src/server/postgres-room-store.js";
 import type {
@@ -159,7 +161,7 @@ async function client(url: string): Promise<TestClient> {
 }
 
 void test("authoritative multiplayer rooms", async (t) => {
-  const { server, wss } = createServer();
+  const { server, wss, productStore, rooms } = createServer();
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const url = `ws://127.0.0.1:${String(portOf(server))}`;
@@ -174,6 +176,12 @@ void test("authoritative multiplayer rooms", async (t) => {
   const joined = await a.next("joined");
   assert.match(joined.code, /^[A-F0-9]{6}$/);
   assert.equal(joined.side, 1);
+  const matchId = roomAt(rooms, joined.code).matchId;
+  assert.ok(matchId);
+  const createdMatch = await productStore.getMatch(matchId);
+  assert.ok(createdMatch);
+  assert.equal(createdMatch.status, "active");
+  assert.equal(createdMatch.participants[0]?.displayName, "甲");
   await a.next("state");
   await t.test("cannot move before an opponent joins", async () => {
     a.send({ type: "move", ply: 0, move: { to: 112 } });
@@ -198,6 +206,9 @@ void test("authoritative multiplayer rooms", async (t) => {
     const board = numericState(sa.state);
     assert.equal(board.board[112], 1);
     assert.equal(board.turn, -1);
+    const events = await productStore.listMatchEvents(matchId);
+    assert.equal(events.length, 1);
+    assert.equal(events[0]?.eventType, "board.move");
   });
   await t.test("rejects stale state and occupied squares", async () => {
     b.send({ type: "move", ply: 0, move: { to: 113 } });
@@ -226,6 +237,10 @@ void test("authoritative multiplayer rooms", async (t) => {
     c.send({ type: "resign" });
     assert.equal((await a.next("state")).state.winner, 1);
     await c.next("state");
+    const completedMatch = await productStore.getMatch(matchId);
+    assert.ok(completedMatch);
+    assert.equal(completedMatch.status, "completed");
+    assert.equal(completedMatch.outcome?.winnerSeat, 0);
     a.send({ type: "rematch" });
     assert.equal((await a.next("state")).state.winner, 1);
     await c.next("state");
@@ -419,7 +434,13 @@ if (!postgresTestUrl) {
     const store1 = new PostgresRoomStore({
       connectionString: postgresTestUrl,
     });
-    const first = createServer({ roomStore: store1 });
+    const productStore1 = new PostgresProductStore({
+      connectionString: postgresTestUrl,
+    });
+    const first = createServer({
+      roomStore: store1,
+      productStore: productStore1,
+    });
     let second: ReturnType<typeof createServer> | null = null;
     let code: string | null = null;
 
@@ -440,6 +461,12 @@ if (!postgresTestUrl) {
         await cleanup.initialize();
         await cleanup.delete(code);
         await cleanup.close();
+        const cleanupPool = new Pool({ connectionString: postgresTestUrl });
+        await cleanupPool.query(
+          "DELETE FROM qiju_matches WHERE room_code = $1",
+          [code],
+        );
+        await cleanupPool.end();
       }
     });
 
@@ -467,7 +494,13 @@ if (!postgresTestUrl) {
     const store2 = new PostgresRoomStore({
       connectionString: postgresTestUrl,
     });
-    second = createServer({ roomStore: store2 });
+    const productStore2 = new PostgresProductStore({
+      connectionString: postgresTestUrl,
+    });
+    second = createServer({
+      roomStore: store2,
+      productStore: productStore2,
+    });
     await second.ready;
     second.server.listen(0, "127.0.0.1");
     await once(second.server, "listening");
@@ -500,7 +533,13 @@ if (!postgresTestUrl) {
     const store1 = new PostgresRoomStore({
       connectionString: postgresTestUrl,
     });
-    const first = createServer({ roomStore: store1 });
+    const productStore1 = new PostgresProductStore({
+      connectionString: postgresTestUrl,
+    });
+    const first = createServer({
+      roomStore: store1,
+      productStore: productStore1,
+    });
     let second: ReturnType<typeof createServer> | null = null;
     let code: string | null = null;
 
@@ -521,6 +560,12 @@ if (!postgresTestUrl) {
         await cleanup.initialize();
         await cleanup.delete(code);
         await cleanup.close();
+        const cleanupPool = new Pool({ connectionString: postgresTestUrl });
+        await cleanupPool.query(
+          "DELETE FROM qiju_matches WHERE room_code = $1",
+          [code],
+        );
+        await cleanupPool.end();
       }
     });
 
@@ -571,7 +616,13 @@ if (!postgresTestUrl) {
     const store2 = new PostgresRoomStore({
       connectionString: postgresTestUrl,
     });
-    second = createServer({ roomStore: store2 });
+    const productStore2 = new PostgresProductStore({
+      connectionString: postgresTestUrl,
+    });
+    second = createServer({
+      roomStore: store2,
+      productStore: productStore2,
+    });
     await second.ready;
     second.server.listen(0, "127.0.0.1");
     await once(second.server, "listening");

@@ -8,6 +8,7 @@ export interface StoredRoomPlayer {
   name: string;
   tokenHash: string;
   bot: boolean;
+  userId?: string;
 }
 
 export interface RoomSnapshot {
@@ -20,6 +21,8 @@ export interface RoomSnapshot {
   touched: number;
   expiresAt: number;
   riichi?: RiichiSessionSnapshot;
+  matchId?: string;
+  eventSequence?: number;
 }
 
 export interface RoomStore {

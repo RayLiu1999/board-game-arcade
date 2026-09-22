@@ -1,6 +1,3 @@
-import { readdir, readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-
 import { Pool, type PoolClient, type PoolConfig } from "pg";
 
 import {
@@ -20,6 +17,7 @@ import {
   type RoomStore,
   type StoredRoomPlayer,
 } from "./room-store.js";
+import { runMigrations } from "./postgres-migrations.js";
 
 interface RoomPlayerRow {
   readonly code: string;
@@ -35,14 +33,15 @@ interface RoomPlayerRow {
   readonly name: string | null;
   readonly token_hash: string | null;
   readonly bot: boolean | null;
+  readonly user_id: string | null;
+  readonly match_id: string | null;
+  readonly event_sequence: number | string;
 }
 
 export interface PostgresRoomStoreOptions {
   connectionString?: string;
   pool?: Pool;
 }
-
-const migrationDirectory = new URL("./migrations/", import.meta.url);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -140,6 +139,7 @@ const player = (row: RoomPlayerRow): StoredRoomPlayer => {
     name: row.name,
     tokenHash: row.token_hash,
     bot: row.bot,
+    ...(row.user_id === null ? {} : { userId: row.user_id }),
   };
 };
 
@@ -161,16 +161,7 @@ export class PostgresRoomStore implements RoomStore {
   }
 
   async initialize(): Promise<void> {
-    const files = (await readdir(fileURLToPath(migrationDirectory)))
-      .filter((file) => file.endsWith(".sql"))
-      .sort();
-    for (const file of files) {
-      const migration = await readFile(
-        new URL(file, migrationDirectory),
-        "utf8",
-      );
-      await this.pool.query(migration);
-    }
+    await runMigrations(this.pool);
   }
 
   async load(now: number): Promise<RoomSnapshot[]> {
@@ -186,10 +177,13 @@ export class PostgresRoomStore implements RoomStore {
           r.touched_at,
           r.expires_at,
           r.riichi_json,
+          r.match_id,
+          r.event_sequence,
           p.seat,
           p.name,
           p.token_hash,
-          p.bot
+          p.bot,
+          p.user_id
         FROM qiju_rooms AS r
         LEFT JOIN qiju_room_players AS p ON p.room_code = r.code
         WHERE r.expires_at > to_timestamp($1 / 1000.0)
@@ -204,6 +198,7 @@ export class PostgresRoomStore implements RoomStore {
         const state = roomState(row.state_json);
         if (state.game !== row.game)
           throw new Error(`房間 ${row.code} 的棋種與 state 不一致`);
+        const eventSequence = revision(row.event_sequence);
         snapshot = {
           code: row.code,
           state,
@@ -215,6 +210,8 @@ export class PostgresRoomStore implements RoomStore {
           revision: revision(row.revision),
           touched: dateMillis(row.touched_at),
           expiresAt: dateMillis(row.expires_at),
+          ...(row.match_id === null ? {} : { matchId: row.match_id }),
+          ...(eventSequence === 0 ? {} : { eventSequence }),
         };
         if (state.game === "riichi" && row.riichi_json !== null)
           snapshot.riichi = riichiSnapshot(row.riichi_json);
@@ -251,9 +248,13 @@ export class PostgresRoomStore implements RoomStore {
         `
           INSERT INTO qiju_rooms (
             code, game, state_json, rounds, rematch_json,
-            revision, touched_at, expires_at, riichi_json
+            revision, touched_at, expires_at, riichi_json,
+            match_id, event_sequence
           )
-          VALUES ($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7, $8, $9::jsonb)
+          VALUES (
+            $1, $2, $3::jsonb, $4, $5::jsonb, $6, $7, $8, $9::jsonb,
+            $10, $11
+          )
         `,
         this.roomParameters(snapshot),
       );
@@ -277,8 +278,10 @@ export class PostgresRoomStore implements RoomStore {
             revision = $5,
             touched_at = $6,
             expires_at = $7,
-            riichi_json = $8::jsonb
-          WHERE code = $1 AND revision = $9
+            riichi_json = $8::jsonb,
+            match_id = $9,
+            event_sequence = $10
+          WHERE code = $1 AND revision = $11
         `,
         [
           snapshot.code,
@@ -289,6 +292,8 @@ export class PostgresRoomStore implements RoomStore {
           new Date(snapshot.touched),
           new Date(snapshot.expiresAt),
           snapshot.riichi ? JSON.stringify(snapshot.riichi) : null,
+          snapshot.matchId ?? null,
+          snapshot.eventSequence ?? 0,
           expectedRevision,
         ],
       );
@@ -321,6 +326,8 @@ export class PostgresRoomStore implements RoomStore {
       new Date(snapshot.touched),
       new Date(snapshot.expiresAt),
       snapshot.riichi ? JSON.stringify(snapshot.riichi) : null,
+      snapshot.matchId ?? null,
+      snapshot.eventSequence ?? 0,
     ];
   }
 
@@ -334,10 +341,18 @@ export class PostgresRoomStore implements RoomStore {
         `
           INSERT INTO qiju_room_players (
             room_code, seat, name, token_hash, bot
+            , user_id
           )
-          VALUES ($1, $2, $3, $4, $5)
+          VALUES ($1, $2, $3, $4, $5, $6)
         `,
-        [snapshot.code, seat, entry.name, entry.tokenHash, entry.bot],
+        [
+          snapshot.code,
+          seat,
+          entry.name,
+          entry.tokenHash,
+          entry.bot,
+          entry.userId ?? null,
+        ],
       );
     }
   }

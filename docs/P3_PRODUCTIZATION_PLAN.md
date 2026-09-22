@@ -501,6 +501,18 @@ P3-A 需要「最小可追溯事件契約」，這是從 P2 的 replay／version
 
 這一片完成後，才開始把 history、rating、matchmaking 與個人頁接上；若底座測試尚未穩定，先不要引入 Redis、支付或複雜賽季邏輯。
 
+### P3-A 目前實作狀態（2026-09-22）
+
+P3-A 的第一個後端切片已落地：
+
+- PostgreSQL migration 新增 users、sessions、matches、match participants、match events 與 audit log；既有房間 snapshot 以 `match_id`／事件序號與產品化資料關聯。
+- `UserStore`、`SessionStore`、`MatchStore`、`AuditStore` 已有 memory／PostgreSQL adapter；session 只保存 hash，對局事件與完成結果以 sequence／狀態轉移保持冪等。
+- 一般棋類落子、數子、認輸與日麻公開牌局事件會寫入最小事件契約；正常終局與重連／重啟恢復會沿用同一筆 match。
+- guest 房間代碼與 seat token 流程維持不變，另提供可注入的 guest identity／session service；既有 seat 權限與日麻暗牌隔離測試仍保留。
+- 已補上 memory、真實 PostgreSQL adapter、事件重送、一般棋類／日麻 server restart 與 E2E 驗證。
+
+本切片刻意尚未加入 history API、登入 cookie／WebSocket handshake、公開觀戰或 rating；這些會在 P3-B／P3-C 以現有 user、session、match 與事件契約為基礎接上，避免先把房間 token 當成長期產品身份。
+
 ## P3 的整體完成定義
 
 P3 不以「所有列出的功能都存在」作為唯一完成條件，而以產品能安全運作作為完成條件：

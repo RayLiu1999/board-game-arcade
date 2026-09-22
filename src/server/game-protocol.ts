@@ -1,4 +1,4 @@
-import { applyMove, createGame, scoringAction } from "../shared/engine.js";
+import { applyMove, scoringAction } from "../shared/engine.js";
 import type { ClientMessage, PlayerSide } from "../shared/protocol.js";
 import type { ClientSocket, SocketSide } from "./room-types.js";
 import { send } from "./room-manager.js";
@@ -59,6 +59,7 @@ async function handleRoomMessage(
           bot: true,
         },
     );
+    await roomManager.syncParticipants(room);
     roomManager.startRiichi(room);
     return;
   }
@@ -77,6 +78,11 @@ async function handleRoomMessage(
     if (message.ply !== room.state.ply)
       throw new Error("棋局已更新，請重新落子");
     room.state = applyMove(room.state, message.move);
+    roomManager.recordMatchEvent(room, {
+      eventType: "board.move",
+      actorSeat: socket.side === 1 ? 0 : 1,
+      payload: { ply: room.state.ply, move: message.move },
+    });
   } else if (
     message.type === "dead" ||
     message.type === "accept" ||
@@ -91,6 +97,14 @@ async function handleRoomMessage(
       },
       boardSide(socket.side),
     );
+    roomManager.recordMatchEvent(room, {
+      eventType: "board.scoring",
+      actorSeat: socket.side === 1 ? 0 : 1,
+      payload: {
+        action: message.type,
+        ...(message.to === undefined ? {} : { to: message.to }),
+      },
+    });
   } else if (message.type === "resign") {
     if (room.state.game === "riichi")
       throw new Error("日麻請透過返回大廳離開，對局將暫停");
@@ -101,6 +115,11 @@ async function handleRoomMessage(
       winner: side === 1 ? -1 : 1,
       reason: "對手認輸",
     };
+    roomManager.recordMatchEvent(room, {
+      eventType: "match.resign",
+      actorSeat: socket.side === 1 ? 0 : 1,
+      payload: { reason: "對手認輸" },
+    });
   } else {
     if (room.state.winner === null) throw new Error("請先完成本局");
     room.rematch = [...new Set([...room.rematch, socket.side])];
@@ -109,13 +128,8 @@ async function handleRoomMessage(
     ).length;
     if (room.rematch.length === humanCount) {
       room.rematch = [];
-      if (room.state.game === "riichi") {
-        room.session?.close();
-        room.session = null;
-        roomManager.startRiichi(room);
-      } else {
-        room.state = createGame(room.state.game, room.state.rows);
-      }
+      await roomManager.beginRematch(room);
+      if (room.state.game === "riichi") roomManager.startRiichi(room);
     }
   }
   roomManager.touch(room);
