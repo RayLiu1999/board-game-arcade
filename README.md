@@ -4,20 +4,20 @@
 
 ## 啟動
 
-需要 Node.js 22 或更新版本。在此資料夾執行：
+需要 Node.js 22 或更新版本，以及 pnpm 10.16.0。在此資料夾執行：
 
 ```sh
-npm ci
-npm start
+pnpm install
+pnpm start
 ```
 
 開啟 **http://localhost:3000**。如需其他連接埠：
 
 ```sh
-PORT=8080 npm start
+PORT=8080 pnpm start
 ```
 
-專案會自動載入根目錄的 `.env`。第一次設定可參考 `.env.example`；請把實際的 PostgreSQL 連線字串填入 `.env`，不要提交該檔案。`DATABASE_URL` 用於正式啟動時保存房間 snapshot、玩家偏好、對局結果與最小事件，`QIJU_TEST_DATABASE_URL` 用於 PostgreSQL 整合測試，應指向獨立的測試資料庫：
+本機開發使用 pnpm；Docker、CI 與正式線上部署維持 npm。`package-lock.json` 提供線上 `npm ci`，`pnpm-lock.yaml` 提供本機可重現安裝。專案會自動載入根目錄的 `.env`。第一次設定可參考 `.env.example`；請把實際的 PostgreSQL 連線字串填入 `.env`，不要提交該檔案。`DATABASE_URL` 用於正式啟動時保存房間 snapshot、玩家偏好、對局結果與最小事件，`QIJU_TEST_DATABASE_URL` 用於 PostgreSQL 整合測試，應指向獨立的測試資料庫：
 
 ```sh
 # .env
@@ -25,13 +25,13 @@ DATABASE_URL='postgresql://user:password@host:5432/qiju'
 QIJU_TEST_DATABASE_URL='postgresql://user:password@host:5432/qiju_test'
 ```
 
-需要只套用 migration 時執行 `npm run migrate`。如果要清空目前 `DATABASE_URL` 中的 `qiju_*` 資料表並完整重建，執行 `npm run refresh`，互動時輸入 `REFRESH` 確認；非互動環境可用 `npm run refresh -- --yes`。refresh 會在同一個 transaction 內刪除並重建，migration 失敗時會 rollback；正式環境預設禁止執行，必須額外加上 `--allow-production`。
+需要只套用 migration 時執行 `pnpm run migrate`。如果要清空目前 `DATABASE_URL` 中的 `qiju_*` 資料表並完整重建，執行 `pnpm run refresh`，互動時輸入 `REFRESH` 確認；非互動環境可用 `pnpm run refresh -- --yes`。refresh 會在同一個 transaction 內刪除並重建，migration 失敗時會 rollback；正式環境預設禁止執行，必須額外加上 `--allow-production`。
 
-`npm run dev` 會在伺服器檔案變更時重新啟動。前端為原生 ES modules，伺服器與共用棋規以 TypeScript 維護，啟動與測試由 `tsx` 執行。日麻 Worker 與共用棋規 bundle 可由 `npm run build` 產生；安裝依賴後，執行時不載入 CDN 或外部服務。
+`pnpm run dev` 會在伺服器檔案變更時重新啟動。前端為原生 ES modules，伺服器與共用棋規以 TypeScript 維護，啟動與測試由 `tsx` 執行。日麻 Worker 與共用棋規 bundle 可由 `pnpm run build` 產生；安裝依賴後，執行時不載入 CDN 或外部服務。
 
 ### Docker Compose
 
-需要 Docker Desktop 或其他相容 Docker Compose 的環境。Compose 會先啟動一次性的 `migrate` service，使用 `DATABASE_URL` 連線到外部 PostgreSQL 並執行 migration；成功後才啟動 Node.js 應用程式：
+需要 Docker Desktop 或其他相容 Docker Compose 的環境。Compose 會先啟動一次性的 `migrate` service，使用 `DATABASE_URL` 連線到外部 PostgreSQL 並執行 migration；成功後才啟動 Node.js 應用程式。Docker 內仍使用 npm，與線上部署一致：
 
 ```sh
 cp .env.docker.example .env.docker
@@ -132,17 +132,17 @@ PostgreSQL migration 會在伺服器啟動時自動初始化。日麻 live sessi
 - 本機日麻由專用 Web Worker 執行，不提供悔棋或重新整理續局。離開本機牌桌前會提醒。
 - 同機遮罩防止一般交接時看到他人的手牌，並非同一裝置上的防作弊安全機制。
 
-日麻 Worker 已打包在 `public/riichi-worker.js`。修改 `lib/riichi-session.ts`、`src/riichi-worker.ts`、`src/shared/` 或更新套件後執行 `npm run build`。不需 CDN。
+日麻 Worker 已打包在 `public/riichi-worker.js`。修改 `lib/riichi-session.ts`、`src/riichi-worker.ts`、`src/shared/` 或更新套件後執行 `pnpm run build`。不需 CDN。
 
 ## 測試
 
 ```sh
-npm test
-npm run test:e2e
-npm run test:postgres # 需設定 QIJU_TEST_DATABASE_URL
+pnpm test
+pnpm run test:e2e
+pnpm run test:postgres # 需設定 QIJU_TEST_DATABASE_URL
 ```
 
-`npm test` 使用 Node 內建測試執行器，涵蓋棋規（含將棋打入／升變／打步詰）、七種棋的規則契約、可重現走訪、fast-check 合法路徑與 reachable random positions 測試、協定訊息邊界、日麻合法選項／無役與振聽／符番／結算／暗牌隔離、AI 合法走法、WebSocket 兩端同步、非法／過期落子、滿房、斷線重連、認輸、再戰與 HTTP 檔案邊界，也包含 PostgreSQL adapter、identity/session、match event idempotency、guest claim、歷史／統計與重啟恢復測試（未設定專用 DB 時各 1 項 skip）。`npm run test:postgres` 會執行需要真實 PostgreSQL 的 adapter 與 server restart 測試，請使用獨立測試資料庫設定 `QIJU_TEST_DATABASE_URL`。`npm run test:e2e` 會先建置瀏覽器 bundle，再用 Playwright 驗證建立房間、加入房間與落子同步。整合測試會在本機開啟隨機連接埠；E2E 會啟動固定的 4173 連接埠。
+`pnpm test` 使用 Node 內建測試執行器，涵蓋棋規（含將棋打入／升變／打步詰）、七種棋的規則契約、可重現走訪、fast-check 合法路徑與 reachable random positions 測試、協定訊息邊界、日麻合法選項／無役與振聽／符番／結算／暗牌隔離、AI 合法走法、WebSocket 兩端同步、非法／過期落子、滿房、斷線重連、認輸、再戰與 HTTP 檔案邊界，也包含 PostgreSQL adapter、identity/session、match event idempotency、guest claim、歷史／統計與重啟恢復測試（未設定專用 DB 時各 1 項 skip）。`pnpm run test:postgres` 會執行需要真實 PostgreSQL 的 adapter 與 server restart 測試，請使用獨立測試資料庫設定 `QIJU_TEST_DATABASE_URL`。`pnpm run test:e2e` 會先建置瀏覽器 bundle，再用 Playwright 驗證建立房間、加入房間與落子同步。整合測試會在本機開啟隨機連接埠；E2E 會啟動固定的 4173 連接埠。
 
 ## 程式結構
 
@@ -162,6 +162,8 @@ src/server/product-store.ts       User／Session／Match／Audit abstraction 與
 src/server/product-identity.ts    guest identity、session authentication 與撤銷
 src/server/product-security.ts    session token 產生、hash 與 constant-time 比對
 src/server/postgres-migrations.ts 共用 PostgreSQL migration runner
+package-lock.json          線上 npm 安裝鎖檔
+pnpm-lock.yaml              本機 pnpm 安裝鎖檔
 scripts/migrate.ts         套用可重複執行的 migration
 scripts/refresh.ts         清空並在 transaction 內重建 qiju_* 資料表
 src/server/migrations/001-room-store.sql 房間與玩家資料表 migration
@@ -195,4 +197,4 @@ test/                   棋規與真實 WebSocket 整合測試
 test/e2e/room.spec.ts   Playwright 建立房間、加入房間與落子同步流程
 ```
 
-chess.js 的瀏覽器版本已附於專案內（BSD-2-Clause 授權亦附上）。更新 npm 中的 chess.js 時，請同步更新 `public/vendor/chess.js` 與授權，並執行測試。依賴與 API 參考：[chess.js](https://github.com/jhlywa/chess.js)、[ws](https://github.com/websockets/ws)。
+chess.js 的瀏覽器版本已附於專案內（BSD-2-Clause 授權亦附上）。更新 chess.js 套件時，請同步更新 `public/vendor/chess.js` 與授權，並執行測試。依賴與 API 參考：[chess.js](https://github.com/jhlywa/chess.js)、[ws](https://github.com/websockets/ws)。

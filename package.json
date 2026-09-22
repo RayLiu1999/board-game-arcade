@@ -2,6 +2,7 @@
   "name": "qiju-board-game-arcade",
   "version": "1.0.0",
   "private": true,
+  "packageManager": "pnpm@10.16.0",
   "type": "module",
   "scripts": {
     "start": "node --env-file-if-exists=.env --import=tsx src/server/server.ts",
@@ -14,7 +15,7 @@
     "lint": "eslint \"**/*.ts\" --max-warnings 0",
     "format": "prettier --write lib/*.ts src/**/*.ts scripts/*.ts test/**/*.ts playwright.config.ts public/index.html public/style.css docs/*.md README.md package.json tsconfig.json eslint.config.mjs",
     "format:check": "prettier --check lib/*.ts src/**/*.ts scripts/*.ts test/**/*.ts playwright.config.ts public/index.html public/style.css docs/*.md README.md package.json tsconfig.json eslint.config.mjs",
-    "test:e2e": "npm run build && playwright test",
+    "test:e2e": "tsx scripts/build.ts && playwright test",
     "build": "tsx scripts/build.ts"
   },
   "dependencies": {

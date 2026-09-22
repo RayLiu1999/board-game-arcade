@@ -7,7 +7,7 @@
 目前基準版本：
 
 - Git commit：`91630b1 Initial commit: Qiju board game arcade`
-- 測試：`npm test` 目前共 66 個測試；設定專用 PostgreSQL 測試資料庫時會執行完整 adapter 與 server restart cases；`npm run test:e2e` 通過 1 個瀏覽器流程
+- 測試：本機以 `pnpm test` 執行，目前共 66 個測試；設定專用 PostgreSQL 測試資料庫時會執行完整 adapter 與 server restart cases；`pnpm run test:e2e` 通過 1 個瀏覽器流程。CI 與線上部署仍使用 npm。
 - 執行環境：Node.js 22 或更新版本
 
 ### TS-first 決策
@@ -149,9 +149,9 @@ majiang-core 推進牌局事件
 
 ```text
 src/shared/engine.ts ─┐
-src/shared/shogi.ts  ├─ npm run build
+src/shared/shogi.ts  ├─ pnpm run build
 src/riichi-worker.ts ┘
-        ↓ npm run build
+        ↓ pnpm run build
 public/engine.js / public/shogi.js / public/riichi-worker.js
 ```
 
