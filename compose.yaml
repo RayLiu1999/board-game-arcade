@@ -11,7 +11,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set in .env}
     init: true
     ports:
-      - "${QIJU_PORT:-3000}:3000"
+      - "${HOST:-127.0.0.1}:${QIJU_PORT:-3000}:3000"
     restart: unless-stopped
     logging:
       driver: json-file
