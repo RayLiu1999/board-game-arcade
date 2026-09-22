@@ -29,7 +29,7 @@ QIJU_TEST_DATABASE_URL='postgresql://user:password@host:5432/qiju_test'
 
 ### Docker Compose
 
-需要 Docker Desktop 或其他相容 Docker Compose 的環境。Compose 會啟動 Node.js 應用程式，並使用 `DATABASE_URL` 連線到外部 PostgreSQL；伺服器啟動時會自動執行 migration：
+需要 Docker Desktop 或其他相容 Docker Compose 的環境。Compose 會先啟動一次性的 `migrate` service，使用 `DATABASE_URL` 連線到外部 PostgreSQL 並執行 migration；成功後才啟動 Node.js 應用程式：
 
 ```sh
 cp .env.docker.example .env.docker
@@ -41,11 +41,14 @@ docker compose --env-file .env.docker up --build -d
 
 ```sh
 docker compose --env-file .env.docker ps
+docker compose --env-file .env.docker logs --timestamps migrate
 docker compose --env-file .env.docker logs --timestamps -f app
 docker compose --env-file .env.docker down
 ```
 
 如果已經在根目錄 `.env` 設定 `DATABASE_URL`，也可以直接執行 `docker compose up --build -d`。Compose 不會建立或管理 PostgreSQL volume；資料庫生命週期與備份由線上 PostgreSQL 服務負責。
+
+如果 migration 失敗，`app` 不會啟動；可先查看 `migrate` log，修正資料庫連線或權限後重新執行 `docker compose --env-file .env.docker up --build -d`。app 啟動時仍會再次執行同一組可重複 migration，作為啟動時的安全檢查。
 
 伺服器程式本身會以 UTC ISO 8601 格式為啟動與初始化錯誤加上時間戳，例如 `[2026-09-22T01:23:45.000Z]`。Docker 使用 `json-file` 保存容器 log，單一檔案上限 10 MB、最多保留 5 個檔案；`docker compose logs --timestamps` 會顯示 Docker 收集的時間。
 
