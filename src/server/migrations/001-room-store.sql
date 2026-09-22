@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS qiju_rooms (
   expires_at timestamptz NOT NULL
 );
 
+COMMENT ON TABLE qiju_rooms IS '棋聚進行中的遊戲房間與可恢復狀態。';
+
 CREATE TABLE IF NOT EXISTS qiju_room_players (
   room_code varchar(6) NOT NULL REFERENCES qiju_rooms(code) ON DELETE CASCADE,
   seat smallint NOT NULL CHECK (seat BETWEEN 0 AND 3),
@@ -20,6 +22,8 @@ CREATE TABLE IF NOT EXISTS qiju_room_players (
   bot boolean NOT NULL DEFAULT false,
   PRIMARY KEY (room_code, seat)
 );
+
+COMMENT ON TABLE qiju_room_players IS '棋聚房間中的玩家座位、重連 token 雜湊與身份綁定。';
 
 CREATE INDEX IF NOT EXISTS qiju_rooms_expires_at_idx
   ON qiju_rooms (expires_at);

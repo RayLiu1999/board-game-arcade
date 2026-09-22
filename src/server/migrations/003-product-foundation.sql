@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS qiju_users (
   last_active_at timestamptz NOT NULL
 );
 
+COMMENT ON TABLE qiju_users IS '棋聚玩家身份與基本個人資料。';
+
 CREATE TABLE IF NOT EXISTS qiju_sessions (
   id uuid PRIMARY KEY,
   user_id uuid NOT NULL REFERENCES qiju_users(id) ON DELETE CASCADE,
@@ -14,6 +16,8 @@ CREATE TABLE IF NOT EXISTS qiju_sessions (
   expires_at timestamptz NOT NULL,
   revoked_at timestamptz
 );
+
+COMMENT ON TABLE qiju_sessions IS '棋聚玩家的登入／訪客 session，僅保存 token 雜湊。';
 
 CREATE INDEX IF NOT EXISTS qiju_sessions_user_id_idx
   ON qiju_sessions (user_id);
@@ -38,6 +42,8 @@ CREATE TABLE IF NOT EXISTS qiju_matches (
   retention_until timestamptz
 );
 
+COMMENT ON TABLE qiju_matches IS '棋聚對局主檔與生命週期、結果摘要。';
+
 CREATE INDEX IF NOT EXISTS qiju_matches_room_code_idx
   ON qiju_matches (room_code);
 
@@ -57,6 +63,8 @@ CREATE TABLE IF NOT EXISTS qiju_match_participants (
   PRIMARY KEY (match_id, seat)
 );
 
+COMMENT ON TABLE qiju_match_participants IS '棋聚對局參與者、座位與勝負結果。';
+
 CREATE TABLE IF NOT EXISTS qiju_match_events (
   match_id uuid NOT NULL REFERENCES qiju_matches(id) ON DELETE CASCADE,
   sequence bigint NOT NULL CHECK (sequence > 0),
@@ -67,6 +75,8 @@ CREATE TABLE IF NOT EXISTS qiju_match_events (
   schema_version integer NOT NULL CHECK (schema_version > 0),
   PRIMARY KEY (match_id, sequence)
 );
+
+COMMENT ON TABLE qiju_match_events IS '棋聚對局事件流水，供稽核與必要的重建使用。';
 
 CREATE INDEX IF NOT EXISTS qiju_match_events_created_at_idx
   ON qiju_match_events (created_at);
@@ -80,6 +90,8 @@ CREATE TABLE IF NOT EXISTS qiju_audit_log (
   metadata_json jsonb NOT NULL DEFAULT 'null'::jsonb,
   created_at timestamptz NOT NULL
 );
+
+COMMENT ON TABLE qiju_audit_log IS '棋聚產品操作稽核紀錄。';
 
 CREATE INDEX IF NOT EXISTS qiju_audit_log_created_at_idx
   ON qiju_audit_log (created_at DESC);

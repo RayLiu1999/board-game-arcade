@@ -35,6 +35,73 @@ if (!databaseUrl) {
     });
 
     await store.initialize();
+    const comments = await cleanup.query<{
+      table_name: string;
+      description: string | null;
+    }>(
+      `
+        SELECT
+          c.relname AS table_name,
+          obj_description(c.oid, 'pg_class') AS description
+        FROM pg_class AS c
+        JOIN pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE n.nspname = current_schema()
+          AND c.relkind = 'r'
+          AND c.relname = ANY($1::text[])
+        ORDER BY c.relname
+      `,
+      [
+        [
+          "qiju_audit_log",
+          "qiju_match_events",
+          "qiju_match_participants",
+          "qiju_matches",
+          "qiju_room_players",
+          "qiju_rooms",
+          "qiju_sessions",
+          "qiju_user_preferences",
+          "qiju_users",
+        ],
+      ],
+    );
+    assert.deepEqual(comments.rows, [
+      {
+        table_name: "qiju_audit_log",
+        description: "棋聚產品操作稽核紀錄。",
+      },
+      {
+        table_name: "qiju_match_events",
+        description: "棋聚對局事件流水，供稽核與必要的重建使用。",
+      },
+      {
+        table_name: "qiju_match_participants",
+        description: "棋聚對局參與者、座位與勝負結果。",
+      },
+      {
+        table_name: "qiju_matches",
+        description: "棋聚對局主檔與生命週期、結果摘要。",
+      },
+      {
+        table_name: "qiju_room_players",
+        description: "棋聚房間中的玩家座位、重連 token 雜湊與身份綁定。",
+      },
+      {
+        table_name: "qiju_rooms",
+        description: "棋聚進行中的遊戲房間與可恢復狀態。",
+      },
+      {
+        table_name: "qiju_sessions",
+        description: "棋聚玩家的登入／訪客 session，僅保存 token 雜湊。",
+      },
+      {
+        table_name: "qiju_user_preferences",
+        description: "棋聚玩家的個人偏好設定。",
+      },
+      {
+        table_name: "qiju_users",
+        description: "棋聚玩家身份與基本個人資料。",
+      },
+    ]);
     const user = await store.createUser({
       id: userId,
       displayName: "資料庫玩家",
