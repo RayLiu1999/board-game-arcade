@@ -8,6 +8,14 @@ import type { RoomStore } from "./room-store.js";
 import { createConfiguredRoomStore } from "./room-store-factory.js";
 import { attachWebSocketServer } from "./websocket-server.js";
 
+const log = (message: string): void => {
+  console.log(`[${new Date().toISOString()}] ${message}`);
+};
+
+const logError = (message: string, error: unknown): void => {
+  console.error(`[${new Date().toISOString()}] ${message}`, error);
+};
+
 export interface ServerOptions {
   roomStore?: RoomStore;
 }
@@ -37,11 +45,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   void ready
     .then(() => {
       server.listen(port, "0.0.0.0", () => {
-        console.log(`棋聚已啟動：http://localhost:${String(port)}`);
+        log(`棋聚已啟動：http://localhost:${String(port)}`);
       });
     })
     .catch((error: unknown) => {
-      console.error("房間儲存初始化失敗", error);
+      logError("房間儲存初始化失敗", error);
       process.exitCode = 1;
     });
 }

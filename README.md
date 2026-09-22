@@ -41,11 +41,13 @@ docker compose --env-file .env.docker up --build -d
 
 ```sh
 docker compose --env-file .env.docker ps
-docker compose --env-file .env.docker logs -f app
+docker compose --env-file .env.docker logs --timestamps -f app
 docker compose --env-file .env.docker down
 ```
 
 如果已經在根目錄 `.env` 設定 `DATABASE_URL`，也可以直接執行 `docker compose up --build -d`。Compose 不會建立或管理 PostgreSQL volume；資料庫生命週期與備份由線上 PostgreSQL 服務負責。
+
+伺服器程式本身會以 UTC ISO 8601 格式為啟動與初始化錯誤加上時間戳，例如 `[2026-09-22T01:23:45.000Z]`。Docker 使用 `json-file` 保存容器 log，單一檔案上限 10 MB、最多保留 5 個檔案；`docker compose logs --timestamps` 會顯示 Docker 收集的時間。
 
 正式啟動時若設定 `DATABASE_URL`，線上房間會使用 PostgreSQL 保存一般棋類房間；未設定時使用 memory store，適合本機開發。可用 `QIJU_ROOM_STORE=memory` 強制使用 memory store：
 
