@@ -49,6 +49,26 @@ docker compose --env-file .env.docker down
 
 伺服器程式本身會以 UTC ISO 8601 格式為啟動與初始化錯誤加上時間戳，例如 `[2026-09-22T01:23:45.000Z]`。Docker 使用 `json-file` 保存容器 log，單一檔案上限 10 MB、最多保留 5 個檔案；`docker compose logs --timestamps` 會顯示 Docker 收集的時間。
 
+### GitHub Container Registry
+
+`.github/workflows/publish-image.yml` 會在 Pull Request 建置 image 但不發布；推送到 `main` 或 `v1.2.3` 格式的版本 tag 時，會自動發布：
+
+```text
+ghcr.io/rayliu1999/board-game-arcade:latest
+```
+
+`main` 會產生 `latest`、`main` 與 `sha-*` tags；版本 tag 會產生 `1.2.3`、`1.2`、`v1.2.3` 與 `sha-*` tags。要使用 GHCR image，先在 GitHub Actions 完成一次發布，再以現有 `.env` 的 `DATABASE_URL` 啟動：
+
+```sh
+docker pull ghcr.io/rayliu1999/board-game-arcade:latest
+docker run --rm --name qiju \
+  --env-file .env \
+  -p 127.0.0.1:3000:3000 \
+  ghcr.io/rayliu1999/board-game-arcade:latest
+```
+
+若 GHCR package 設為 private，部署主機需先以具有 `read:packages` 權限的 GitHub token 登入 `ghcr.io`；公開 package 則可直接 pull。Workflow 使用 GitHub Actions 內建的 `GITHUB_TOKEN` 與 `packages: write`，不需要把 registry token 寫進 repository。
+
 正式啟動時若設定 `DATABASE_URL`，線上房間會使用 PostgreSQL 保存一般棋類房間；未設定時使用 memory store，適合本機開發。可用 `QIJU_ROOM_STORE=memory` 強制使用 memory store：
 
 ```sh
