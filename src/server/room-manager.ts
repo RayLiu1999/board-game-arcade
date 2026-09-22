@@ -10,6 +10,7 @@ import {
   CHAT_RATE_LIMIT_WINDOW_MS,
   type ChatMessage,
   type ClientMessage,
+  type MatchmakeMessage,
 } from "../shared/protocol.js";
 import {
   type ClientSocket,
@@ -36,6 +37,7 @@ import {
   type MatchOutcome,
   type ProductStore,
 } from "./product-store.js";
+import { MatchmakingQueue, type MatchmakingTicket } from "./matchmaking.js";
 
 export type SendMessage = (socket: ClientSocket, data: unknown) => void;
 
@@ -43,6 +45,7 @@ export interface RoomManagerOptions {
   sendMessage?: SendMessage;
   store?: RoomStore;
   productStore?: ProductStore;
+  matchmaking?: MatchmakingQueue;
   now?: () => number;
 }
 
@@ -68,12 +71,14 @@ const normalizeName = (value: string | undefined, index: number): string =>
 
 export class RoomManager {
   readonly rooms = new Map<string, Room>();
+  readonly matchmaking: MatchmakingQueue;
   readonly ready: Promise<void>;
 
   private readonly sendMessage: SendMessage;
   private readonly store: RoomStore;
   readonly productStore: ProductStore;
   private readonly now: () => number;
+  private readonly matchmakingSockets = new Map<string, ClientSocket>();
   private readonly roomLocks = new Map<string, Promise<void>>();
   private readonly persistenceQueues = new Map<string, Promise<void>>();
   private entryLock: Promise<void> = Promise.resolve();
@@ -85,6 +90,7 @@ export class RoomManager {
     this.sendMessage = options.sendMessage ?? send;
     this.store = options.store ?? new MemoryRoomStore();
     this.productStore = options.productStore ?? new MemoryProductStore();
+    this.matchmaking = options.matchmaking ?? new MatchmakingQueue();
     this.now = options.now ?? Date.now;
     this.ready = this.restore();
   }
@@ -146,7 +152,12 @@ export class RoomManager {
       ? await this.productStore.getMatch(room.matchId)
       : null;
     if (existing) {
-      room.mode = existing.mode === "rated" ? "rated" : "friend";
+      room.mode =
+        existing.mode === "rated"
+          ? "rated"
+          : existing.mode === "public"
+            ? "public"
+            : "friend";
     } else {
       const match = await this.productStore.createMatch({
         roomCode: room.code,
@@ -283,6 +294,83 @@ export class RoomManager {
     room.pendingEvents = [];
     room.chat = [];
     await this.syncParticipants(room);
+  }
+
+  async enqueueMatchmaking(
+    socket: ClientSocket,
+    message: MatchmakeMessage,
+  ): Promise<void> {
+    this.assertOpen();
+    return this.track(
+      (async () => {
+        await this.ready;
+        await this.runEntry(async () => {
+          if (socket.room) throw new Error("請先離開目前房間");
+          if (socket.matchmakingTicketId)
+            throw new Error("你已在公開配對佇列中");
+          const userId = socket.userId;
+          if (!userId) throw new Error("公開配對需要玩家身份");
+          await this.assertUserAvailable(userId);
+          const user = await this.productStore.getUser(userId);
+          if (!user) throw new Error("玩家身份不存在");
+          const rating =
+            message.mode === "rated"
+              ? (await this.productStore.getUserRating(userId, message.game))
+                  .rating
+              : null;
+          if (this.matchmaking.size >= 500)
+            throw new Error("公開配對目前已滿，請稍後再試");
+          const result = this.matchmaking.enqueue({
+            userId,
+            displayName: user.displayName,
+            game: message.game,
+            mode: message.mode,
+            timeControl: message.timeControl,
+            rating,
+            createdAt: this.now(),
+          });
+          this.matchmakingSockets.set(result.ticket.id, socket);
+          if (!result.match) {
+            socket.matchmakingTicketId = result.ticket.id;
+            this.sendMatchmakingStatus(socket, "waiting", result.ticket);
+            return;
+          }
+          await this.createMatchmadeRoom(result.ticket, result.match, socket);
+        });
+      })(),
+    );
+  }
+
+  async cancelMatchmaking(
+    socket: ClientSocket,
+    requestedTicket?: string,
+  ): Promise<void> {
+    if (this.closing) {
+      this.removeMatchmakingSocket(socket);
+      return;
+    }
+    return this.track(
+      (async () => {
+        await this.ready;
+        await this.runEntry(() =>
+          Promise.resolve().then(() => {
+            const ticketId = requestedTicket ?? socket.matchmakingTicketId;
+            if (!ticketId) return;
+            const ticket = this.matchmaking.get(ticketId);
+            if (!ticket) {
+              socket.matchmakingTicketId = null;
+              this.matchmakingSockets.delete(ticketId);
+              return;
+            }
+            if (!socket.userId || ticket.userId !== socket.userId)
+              throw new Error("無法取消其他玩家的配對");
+            this.matchmaking.cancel(ticketId, socket.userId);
+            this.removeMatchmakingSocket(socket);
+            this.sendMatchmakingStatus(socket, "cancelled", ticket);
+          }),
+        );
+      })(),
+    );
   }
 
   private matchOutcome(room: Room): MatchOutcome | null {
@@ -507,6 +595,11 @@ export class RoomManager {
   }
 
   async detach(socket: ClientSocket): Promise<void> {
+    if (socket.matchmakingTicketId) {
+      await this.cancelMatchmaking(socket).catch(() => {
+        this.removeMatchmakingSocket(socket);
+      });
+    }
     const code = socket.room;
     if (!code || this.closing) {
       socket.room = null;
@@ -557,10 +650,7 @@ export class RoomManager {
         message.rounds !== undefined && [0, 1, 2].includes(message.rounds)
           ? message.rounds
           : 1;
-      let code: string;
-      do {
-        code = randomBytes(4).toString("hex").slice(0, 6).toUpperCase();
-      } while (this.rooms.has(code));
+      const code = this.newRoomCode();
       room = {
         code,
         mode: message.mode ?? "friend",
@@ -603,8 +693,8 @@ export class RoomManager {
     }
 
     const existing = room.players[index];
-    if (room.mode === "rated") {
-      if (!socket.userId) throw new Error("競技房需要玩家身份");
+    if (room.mode === "rated" || room.mode === "public") {
+      if (!socket.userId) throw new Error("公開對局需要玩家身份");
       if (existing?.userId && existing.userId !== socket.userId)
         throw new Error("競技房重連需要相同玩家身份");
       if (
@@ -657,27 +747,36 @@ export class RoomManager {
   }
 
   private async pruneInactiveUnsafe(now: number): Promise<void> {
-    for (const [code] of this.rooms) {
-      await this.runExclusiveUnsafe(code, async () => {
-        const room = this.rooms.get(code);
-        if (
-          room &&
-          !room.players.some((player) => Boolean(player?.socket)) &&
-          now >= room.expiresAt
-        ) {
-          room.session?.close();
-          if (room.matchId)
-            await this.productStore.abortMatch({
-              matchId: room.matchId,
-              reason: "room_expired",
-              abortedAt: now,
-            });
-          this.rooms.delete(code);
-          await this.store.delete(code);
+    await this.runEntry(async () => {
+      for (const ticket of this.matchmaking.expire(now)) {
+        const socket = this.matchmakingSockets.get(ticket.id);
+        if (socket) {
+          this.removeMatchmakingSocket(socket);
+          this.sendMatchmakingStatus(socket, "expired", ticket);
         }
-      });
-    }
-    await this.store.pruneExpired(now, [...this.rooms.keys()]);
+      }
+      for (const [code] of this.rooms) {
+        await this.runExclusiveUnsafe(code, async () => {
+          const room = this.rooms.get(code);
+          if (
+            room &&
+            !room.players.some((player) => Boolean(player?.socket)) &&
+            now >= room.expiresAt
+          ) {
+            room.session?.close();
+            if (room.matchId)
+              await this.productStore.abortMatch({
+                matchId: room.matchId,
+                reason: "room_expired",
+                abortedAt: now,
+              });
+            this.rooms.delete(code);
+            await this.store.delete(code);
+          }
+        });
+      }
+      await this.store.pruneExpired(now, [...this.rooms.keys()]);
+    });
   }
 
   closeAll(): Promise<void> {
@@ -698,6 +797,122 @@ export class RoomManager {
 
   private assertOpen(): void {
     if (this.closing) throw new Error("伺服器正在關閉");
+  }
+
+  private async assertUserAvailable(userId: string): Promise<void> {
+    for (const room of this.rooms.values()) {
+      if (!room.players.some((player) => player?.userId === userId)) continue;
+      if (!room.matchId) throw new Error("你已有進行中的對局");
+      const match = await this.productStore.getMatch(room.matchId);
+      if (match?.status === "active") throw new Error("你已有進行中的對局");
+    }
+  }
+
+  private async createMatchmadeRoom(
+    first: MatchmakingTicket,
+    second: MatchmakingTicket,
+    requester: ClientSocket,
+  ): Promise<void> {
+    const left =
+      first.createdAt < second.createdAt ||
+      (first.createdAt === second.createdAt && first.id <= second.id)
+        ? first
+        : second;
+    const right = left === first ? second : first;
+    const leftSocket = this.matchmakingSockets.get(left.id) ?? requester;
+    const rightSocket = this.matchmakingSockets.get(right.id) ?? requester;
+    if (
+      leftSocket.room ||
+      rightSocket.room ||
+      leftSocket.readyState !== WebSocket.OPEN ||
+      rightSocket.readyState !== WebSocket.OPEN
+    )
+      throw new Error("配對對手已離線，請重新嘗試");
+    const code = this.newRoomCode();
+    const now = this.now();
+    const leftToken = createRoomToken();
+    const rightToken = createRoomToken();
+    const room: Room = {
+      code,
+      mode: left.mode === "rated" ? "rated" : "public",
+      state: createGame(left.game),
+      players: [
+        {
+          name: left.displayName,
+          userId: left.userId,
+          tokenHash: hashRoomToken(leftToken),
+          socket: leftSocket,
+        },
+        {
+          name: right.displayName,
+          userId: right.userId,
+          tokenHash: hashRoomToken(rightToken),
+          socket: rightSocket,
+        },
+      ],
+      rounds: 1,
+      rematch: [],
+      touched: now,
+      expiresAt: now + ROOM_TTL_MS,
+      revision: 0,
+      session: null,
+      eventSequence: 0,
+      pendingEvents: [],
+      chat: [],
+    };
+    this.matchmakingSockets.delete(left.id);
+    this.matchmakingSockets.delete(right.id);
+    leftSocket.matchmakingTicketId = null;
+    rightSocket.matchmakingTicketId = null;
+    await this.ensureMatch(room);
+    await this.createPersistentRoom(room);
+    this.rooms.set(code, room);
+    const tokens = [leftToken, rightToken];
+    for (const [index, player] of room.players.entries()) {
+      if (!player?.socket) continue;
+      const socket = player.socket;
+      socket.room = code;
+      socket.side = roomSide(room.state, index);
+      this.sendMatchmakingStatus(socket, "matched", index === 0 ? left : right);
+      this.sendMessage(socket, {
+        type: "joined",
+        code,
+        token: tokens[index],
+        side: socket.side,
+        mode: room.mode,
+      });
+    }
+    this.broadcast(room);
+  }
+
+  private sendMatchmakingStatus(
+    socket: ClientSocket,
+    status: "waiting" | "matched" | "cancelled" | "expired",
+    ticket: MatchmakingTicket,
+  ): void {
+    this.sendMessage(socket, {
+      type: "matchmaking",
+      status,
+      ticket: ticket.id,
+      game: ticket.game,
+      mode: ticket.mode,
+      timeControl: ticket.timeControl,
+      ...(status === "waiting" ? { expiresAt: ticket.expiresAt } : {}),
+    });
+  }
+
+  private removeMatchmakingSocket(socket: ClientSocket): void {
+    const ticketId = socket.matchmakingTicketId;
+    if (ticketId) this.matchmakingSockets.delete(ticketId);
+    socket.matchmakingTicketId = null;
+  }
+
+  private newRoomCode(): string {
+    let code: string;
+    do {
+      code = randomBytes(4).toString("hex").slice(0, 6).toUpperCase();
+    } while (this.rooms.has(code));
+    return code;
   }
 
   private track<Value>(operation: Promise<Value>): Promise<Value> {

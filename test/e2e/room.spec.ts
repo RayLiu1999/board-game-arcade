@@ -61,3 +61,34 @@ test("players can create a room, join it, and make a move", async ({
   await guest.close();
   await guestContext.close();
 });
+
+test("players can find each other through public matchmaking", async ({
+  browser,
+}) => {
+  const firstContext = await browser.newContext();
+  const secondContext = await browser.newContext();
+  const first = await firstContext.newPage();
+  const second = await secondContext.newPage();
+  try {
+    await Promise.all([first.goto("/"), second.goto("/")]);
+    for (const [page, name] of [
+      [first, "配對甲"],
+      [second, "配對乙"],
+    ] as const) {
+      await page.locator("#quick-play").click();
+      await page.locator('[data-mode="matchmaking"]').click();
+      await page.locator("#matchmaking-mode").selectOption("casual");
+      await page.locator("#player-name").fill(name);
+      await page.locator("#start-button").click();
+    }
+    await expect(first.locator("#play-screen")).toBeVisible();
+    await expect(second.locator("#play-screen")).toBeVisible();
+    await expect(first.locator("#mode-badge")).toContainText("公開配對");
+    await expect(second.locator("#mode-badge")).toContainText("公開配對");
+    await expect(first.locator("#turn-detail")).toContainText("輪到你落子");
+    await expect(second.locator("#turn-detail")).toContainText("等待對手落子");
+  } finally {
+    await firstContext.close();
+    await secondContext.close();
+  }
+});

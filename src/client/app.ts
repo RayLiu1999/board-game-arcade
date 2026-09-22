@@ -25,12 +25,14 @@ import {
   GAME_IDS,
   isGameId,
   type ChatMessage,
+  type MatchmakingMode,
+  type MatchmakingTimeControl,
   type RoomMode,
 } from "../shared/protocol.js";
 import type { Difficulty } from "./ai.js";
 
 type Mode = "ai" | "local" | "online";
-type SetupMode = Mode | "rated";
+type SetupMode = Mode | "matchmaking" | "rated";
 type SelectedCell = number | string | null;
 type AppRiichiState = RiichiView & { game: "riichi"; rounds: number };
 type AppState = BoardState | AppRiichiState;
@@ -88,6 +90,16 @@ interface ChatSocketMessage {
   readonly message: ChatMessage;
 }
 
+interface MatchmakingSocketMessage {
+  readonly type: "matchmaking";
+  readonly status: "waiting" | "matched" | "cancelled" | "expired";
+  readonly ticket: string;
+  readonly game: Exclude<GameId, "riichi">;
+  readonly mode: MatchmakingMode;
+  readonly timeControl: MatchmakingTimeControl;
+  readonly expiresAt?: number;
+}
+
 interface SocketErrorMessage {
   readonly type: "error";
   readonly message: string;
@@ -97,6 +109,7 @@ type SocketMessage =
   | JoinedMessage
   | RoomStateMessage
   | ChatSocketMessage
+  | MatchmakingSocketMessage
   | SocketErrorMessage;
 
 interface AiResponse {
@@ -119,7 +132,7 @@ const isMode = (value: string | undefined): value is Mode =>
   value === "ai" || value === "local" || value === "online";
 
 const isSetupMode = (value: string | undefined): value is SetupMode =>
-  isMode(value) || value === "rated";
+  isMode(value) || value === "rated" || value === "matchmaking";
 
 const isDifficulty = (value: string): value is Difficulty =>
   value === "easy" || value === "medium" || value === "hard";
@@ -184,6 +197,7 @@ let setupGame: GameId = "gomoku",
   socket: WebSocket | null = null,
   room: ClientRoom | null = null,
   connected = false,
+  matchmakingTicket: string | null = null,
   reconnectTimer: ReturnType<typeof setTimeout> | null = null,
   connectionPromise: Promise<void> | null = null;
 let riichiWorker: Worker | null = null,
@@ -259,6 +273,8 @@ $$(".close-dialog").forEach(
   (b) =>
     (b.onclick = () => {
       const dialog = b.closest("dialog") as DomElement | null;
+      if (dialog?.id === "setup-dialog" && matchmakingTicket !== null)
+        cancelQueuedMatchmaking();
       dialog?.close();
     }),
 );
@@ -374,7 +390,11 @@ function setSetupMode(m: SetupMode): void {
       : "<span>♟</span>同機雙人<small>面對面對弈</small>";
   const ratedButton = find('[data-mode="rated"]');
   if (ratedButton) ratedButton.hidden = setupGame === "riichi";
-  $("#name-options").hidden = m !== "online" && m !== "rated";
+  const matchmakingButton = find('[data-mode="matchmaking"]');
+  if (matchmakingButton) matchmakingButton.hidden = setupGame === "riichi";
+  $("#matchmaking-options").hidden = m !== "matchmaking";
+  $("#name-options").hidden =
+    m !== "online" && m !== "rated" && m !== "matchmaking";
   $("#setup-note").textContent =
     m === "ai"
       ? "內建休閒 AI，可選擇難度與先後手。"
@@ -382,7 +402,9 @@ function setSetupMode(m: SetupMode): void {
         ? "輪流操作同一台裝置，一起享受棋盤上的時光。"
         : m === "rated"
           ? "競技房會在合法終局後更新雙方 ELO；需要玩家身份。"
-          : "建立房間後分享連結，朋友連線即可開始。";
+          : m === "matchmaking"
+            ? "伺服器會依棋種、配對類型與 ELO 範圍尋找對手；等待期間可以取消。"
+            : "建立房間後分享連結，朋友連線即可開始。";
   if (setupGame === "riichi")
     $("#setup-note").textContent =
       m === "ai"
@@ -391,8 +413,11 @@ function setSetupMode(m: SetupMode): void {
           ? "四人輪流交接裝置，查看手牌前會顯示遮罩。日麻不提供本機存檔與悔棋。"
           : "四人房間；房主可用 AI 補齊空位後開始。";
   $("#start-button").innerHTML =
-    (m === "online" || m === "rated" ? "建立房間" : "開始對弈") +
-    " <span>→</span>";
+    (m === "online" || m === "rated"
+      ? "建立房間"
+      : m === "matchmaking"
+        ? "開始配對"
+        : "開始對弈") + " <span>→</span>";
 }
 $$("[data-mode]").forEach(
   (b) =>
@@ -437,9 +462,16 @@ function cancelAI() {
   worker = null;
   thinking = false;
 }
+function cancelQueuedMatchmaking(): void {
+  const ticket = matchmakingTicket;
+  matchmakingTicket = null;
+  if (ticket && socket?.readyState === 1)
+    socket.send(JSON.stringify({ type: "matchmake-cancel", ticket }));
+}
 function leaveRoom() {
   if (reconnectTimer !== null) clearTimeout(reconnectTimer);
   reconnectTimer = null;
+  cancelQueuedMatchmaking();
   room = null;
   session.set(null);
   if (socket?.readyState === 1) socket.send(JSON.stringify({ type: "leave" }));
@@ -450,7 +482,7 @@ function lobby() {
   riichiWorker?.terminate();
   riichiWorker = null;
   riichiHandoff = null;
-  if (mode === "online") leaveRoom();
+  if (mode === "online" || matchmakingTicket !== null) leaveRoom();
   $("#play-screen").hidden = true;
   $("#lobby").hidden = false;
   $("#crumb").textContent = "遊戲大廳";
@@ -548,12 +580,42 @@ $("#setup-form").onsubmit = async (e) => {
   cancelAI();
   snapshots = [];
   selected = null;
-  if (setupMode === "online" || setupMode === "rated") {
+  if (
+    setupMode === "online" ||
+    setupMode === "rated" ||
+    setupMode === "matchmaking"
+  ) {
     try {
       await ensureProductSession($("#player-name").value);
       await connect();
       const ws = socket;
       if (!ws) throw new Error("連線尚未建立");
+      if (setupMode === "matchmaking" && matchmakingTicket) {
+        ws.send(
+          JSON.stringify({
+            type: "matchmake-cancel",
+            ticket: matchmakingTicket,
+          }),
+        );
+        return;
+      }
+      if (setupMode === "matchmaking") {
+        const matchmakingMode = $("#matchmaking-mode").value;
+        if (matchmakingMode !== "rated" && matchmakingMode !== "casual") {
+          toast("無效的公開配對類型");
+          return;
+        }
+        ws.send(
+          JSON.stringify({
+            type: "matchmake",
+            game: setupGame,
+            mode: matchmakingMode,
+            timeControl: "unlimited",
+          }),
+        );
+        $("#start-button").disabled = true;
+        return;
+      }
       ws.send(
         JSON.stringify({
           type: "create",
@@ -654,6 +716,27 @@ function connect(): Promise<void> {
         selected = null;
         $("#start-button").disabled = false;
       }
+      if (msg.type === "matchmaking") {
+        if (msg.status === "waiting") {
+          matchmakingTicket = msg.ticket;
+          $("#start-button").disabled = false;
+          $("#start-button").innerHTML = "取消配對 <span>×</span>";
+          $("#setup-note").textContent =
+            "正在等待合適的對手；你可以按下按鈕取消配對。";
+        } else {
+          if (matchmakingTicket === msg.ticket) matchmakingTicket = null;
+          $("#start-button").disabled = false;
+          if (msg.status === "cancelled") {
+            setSetupMode("matchmaking");
+            toast("已取消公開配對");
+          } else if (msg.status === "expired") {
+            setSetupMode("matchmaking");
+            toast("配對等待已逾時，請重新嘗試");
+          } else {
+            toast("已找到對手，準備開始對局");
+          }
+        }
+      }
       if (msg.type === "state") {
         if (!room || room.code !== msg.code) return;
         const fresh = $("#play-screen").hidden;
@@ -706,6 +789,11 @@ function connect(): Promise<void> {
       connected = false;
       connectionPromise = null;
       networkBusy = false;
+      if (matchmakingTicket) {
+        matchmakingTicket = null;
+        $("#start-button").disabled = false;
+        toast("公開配對連線中斷，請重新嘗試");
+      }
       reject(Error("無法連線，請確認伺服器已啟動"));
       if (mode === "online" && room) {
         render();
@@ -891,7 +979,9 @@ function render(): void {
         ? "♟ 同機雙人"
         : room?.mode === "rated"
           ? "♜ 競技對局"
-          : "♧ 線上好友";
+          : room?.mode === "public"
+            ? "⚔ 公開配對"
+            : "♧ 線上好友";
   const done = s.winner !== null,
     scoring = s.phase === "scoring",
     waiting =

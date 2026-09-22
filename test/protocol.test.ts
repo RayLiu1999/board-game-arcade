@@ -83,6 +83,24 @@ register("protocol parser normalizes supported room and game commands", () => {
     type: "dead",
     to: 40,
   });
+  assert.deepEqual(
+    parseClientMessage({
+      type: "matchmake",
+      game: "gomoku",
+      mode: "rated",
+      timeControl: "unlimited",
+    }),
+    {
+      type: "matchmake",
+      game: "gomoku",
+      mode: "rated",
+      timeControl: "unlimited",
+    },
+  );
+  assert.deepEqual(
+    parseClientMessage({ type: "matchmake-cancel", ticket: "ticket-1" }),
+    { type: "matchmake-cancel", ticket: "ticket-1" },
+  );
   assert.deepEqual(parseClientMessage({ type: "leave" }), { type: "leave" });
 });
 
@@ -91,6 +109,19 @@ register("protocol parser rejects invalid messages at the boundary", () => {
   rejectsMessage({});
   rejectsMessage({ type: "create", game: "mahjong" });
   rejectsMessage({ type: "create", game: "go", mode: "ranked" });
+  rejectsMessage({
+    type: "matchmake",
+    game: "riichi",
+    mode: "rated",
+    timeControl: "unlimited",
+  });
+  rejectsMessage({
+    type: "matchmake",
+    game: "go",
+    mode: "ranked",
+    timeControl: "unlimited",
+  });
+  rejectsMessage({ type: "matchmake-cancel", ticket: 3 });
   rejectsMessage({ type: "create", game: "go", rounds: "0" });
   rejectsMessage({ type: "join", code: 123 });
   rejectsMessage({ type: "move", ply: 0, move: { to: "40" } });

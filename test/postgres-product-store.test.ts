@@ -221,7 +221,7 @@ if (!databaseUrl) {
       id: secondMatchId,
       roomCode: "DB5678",
       game: "gomoku",
-      mode: "friend",
+      mode: "public",
       startedAt: 1_700_000_000_103,
     });
     await store.addMatchParticipant({

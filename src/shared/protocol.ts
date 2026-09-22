@@ -12,7 +12,10 @@ export const GAME_IDS = [
 export type GameId = (typeof GAME_IDS)[number];
 export type PlayerSide = 1 | -1;
 export type RiichiSeat = 0 | 1 | 2 | 3;
-export type RoomMode = "friend" | "rated";
+export type RoomMode = "friend" | "public" | "rated";
+export type MatchmakingMode = "casual" | "rated";
+export type MatchmakingTimeControl = "unlimited";
+export type MatchmakingGame = Exclude<GameId, "riichi">;
 
 export const CHAT_MAX_LENGTH = 500;
 export const CHAT_HISTORY_LIMIT = 50;
@@ -42,10 +45,22 @@ export interface BoardMove {
 export interface CreateRoomMessage {
   readonly type: "create";
   readonly game: GameId;
-  readonly mode?: RoomMode;
+  readonly mode?: Exclude<RoomMode, "public">;
   readonly size?: number;
   readonly name?: string;
   readonly rounds?: number;
+}
+
+export interface MatchmakeMessage {
+  readonly type: "matchmake";
+  readonly game: MatchmakingGame;
+  readonly mode: MatchmakingMode;
+  readonly timeControl: MatchmakingTimeControl;
+}
+
+export interface MatchmakeCancelMessage {
+  readonly type: "matchmake-cancel";
+  readonly ticket?: string;
 }
 
 export interface JoinRoomMessage {
@@ -85,6 +100,8 @@ export interface RoomCommandMessage {
 
 export type ClientMessage =
   | CreateRoomMessage
+  | MatchmakeMessage
+  | MatchmakeCancelMessage
   | JoinRoomMessage
   | MoveMessage
   | RiichiActionMessage
@@ -112,8 +129,20 @@ const isOptionalInteger = (value: unknown): value is number | undefined =>
 const isOptionalString = (value: unknown): value is string | undefined =>
   value === undefined || typeof value === "string";
 
-const isOptionalRoomMode = (value: unknown): value is RoomMode | undefined =>
+const isOptionalRoomMode = (
+  value: unknown,
+): value is Exclude<RoomMode, "public"> | undefined =>
   value === undefined || value === "friend" || value === "rated";
+
+const isMatchmakingMode = (value: unknown): value is MatchmakingMode =>
+  value === "casual" || value === "rated";
+
+const isMatchmakingTimeControl = (
+  value: unknown,
+): value is MatchmakingTimeControl => value === "unlimited";
+
+const isMatchmakingGame = (value: unknown): value is MatchmakingGame =>
+  isGameId(value) && value !== "riichi";
 
 const hasControlCharacter = (value: string): boolean =>
   Array.from(value).some((character) => {
@@ -165,6 +194,30 @@ export function parseClientMessage(value: unknown): ClientMessage {
       ...(value.size === undefined ? {} : { size: value.size }),
       ...(value.name === undefined ? {} : { name: value.name }),
       ...(value.rounds === undefined ? {} : { rounds: value.rounds }),
+    };
+  }
+
+  if (value.type === "matchmake") {
+    if (
+      !isMatchmakingGame(value.game) ||
+      !isMatchmakingMode(value.mode) ||
+      !isMatchmakingTimeControl(value.timeControl)
+    )
+      throw new Error("公開配對訊息格式錯誤");
+    return {
+      type: "matchmake",
+      game: value.game,
+      mode: value.mode,
+      timeControl: value.timeControl,
+    };
+  }
+
+  if (value.type === "matchmake-cancel") {
+    if (!isOptionalString(value.ticket))
+      throw new Error("取消配對訊息格式錯誤");
+    return {
+      type: "matchmake-cancel",
+      ...(value.ticket === undefined ? {} : { ticket: value.ticket }),
     };
   }
 

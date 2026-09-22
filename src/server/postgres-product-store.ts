@@ -189,6 +189,7 @@ const validMatchMode = (value: string): MatchMode => {
     value === "ai" ||
     value === "local" ||
     value === "friend" ||
+    value === "public" ||
     value === "rated"
   )
     return value;

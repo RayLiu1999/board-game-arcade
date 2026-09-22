@@ -55,6 +55,16 @@ interface ChatMessageEvent {
   readonly message: ChatMessage;
 }
 
+interface MatchmakingMessage {
+  readonly type: "matchmaking";
+  readonly status: "waiting" | "matched" | "cancelled" | "expired";
+  readonly ticket: string;
+  readonly game: string;
+  readonly mode: "casual" | "rated";
+  readonly timeControl: "unlimited";
+  readonly expiresAt?: number;
+}
+
 interface LeftMessage {
   readonly type: "left";
 }
@@ -64,6 +74,7 @@ type ServerMessage =
   | ErrorMessage
   | StateMessage
   | ChatMessageEvent
+  | MatchmakingMessage
   | LeftMessage;
 type ServerMessageType = ServerMessage["type"];
 type MessageOf<Type extends ServerMessageType> = Extract<
@@ -397,6 +408,115 @@ void test("rated rooms require identities and settle ELO once", async (t) => {
     (await productStore.getUserRating(first.user.id, "gomoku")).rating,
     1520,
   );
+});
+
+void test("public matchmaking queues, cancels, and creates rated or casual rooms", async (t) => {
+  const { server, wss, productStore, rooms } = createServer();
+  await once(server.listen(0, "127.0.0.1"), "listening");
+  const url = `ws://127.0.0.1:${String(portOf(server))}`;
+  t.after(async () => {
+    for (const ws of wss.clients) ws.terminate();
+    await closeServer(server);
+  });
+  const createIdentity = async (displayName: string) => {
+    const user = await productStore.createUser({ displayName });
+    const token = createSessionToken();
+    await productStore.createSession({
+      userId: user.id,
+      token,
+      expiresAt: Date.now() + 60_000,
+    });
+    return { user, token };
+  };
+  const first = await createIdentity("配對甲");
+  const second = await createIdentity("配對乙");
+  const third = await createIdentity("休閒甲");
+  const fourth = await createIdentity("休閒乙");
+  const a = await client(url, first.token);
+  const b = await client(url, second.token);
+  const c = await client(url, third.token);
+  const d = await client(url, fourth.token);
+
+  a.send({
+    type: "matchmake",
+    game: "gomoku",
+    mode: "rated",
+    timeControl: "unlimited",
+  });
+  const waiting = await a.next("matchmaking");
+  assert.equal(waiting.status, "waiting");
+  assert.ok(waiting.expiresAt);
+
+  b.send({
+    type: "matchmake",
+    game: "gomoku",
+    mode: "rated",
+    timeControl: "unlimited",
+  });
+  assert.equal((await a.next("matchmaking")).status, "matched");
+  assert.equal((await b.next("matchmaking")).status, "matched");
+  const aJoined = await a.next("joined");
+  const bJoined = await b.next("joined");
+  assert.equal(aJoined.mode, "rated");
+  assert.equal(bJoined.mode, "rated");
+  await a.next("state");
+  await b.next("state");
+  const ratedRoom = roomAt(rooms, aJoined.code);
+  assert.equal(ratedRoom.mode, "rated");
+  assert.equal(
+    (await productStore.getMatch(ratedRoom.matchId ?? ""))?.mode,
+    "rated",
+  );
+  assert.deepEqual(
+    (await productStore.getMatch(ratedRoom.matchId ?? ""))?.participants.map(
+      (participant) => participant.userId,
+    ),
+    [first.user.id, second.user.id],
+  );
+
+  c.send({
+    type: "matchmake",
+    game: "gomoku",
+    mode: "casual",
+    timeControl: "unlimited",
+  });
+  const casualWaiting = await c.next("matchmaking");
+  assert.equal(casualWaiting.status, "waiting");
+  c.send({ type: "matchmake-cancel", ticket: casualWaiting.ticket });
+  assert.equal((await c.next("matchmaking")).status, "cancelled");
+  c.send({
+    type: "matchmake",
+    game: "gomoku",
+    mode: "casual",
+    timeControl: "unlimited",
+  });
+  assert.equal((await c.next("matchmaking")).status, "waiting");
+  d.send({
+    type: "matchmake",
+    game: "gomoku",
+    mode: "casual",
+    timeControl: "unlimited",
+  });
+  assert.equal((await c.next("matchmaking")).status, "matched");
+  assert.equal((await d.next("matchmaking")).status, "matched");
+  const casualJoined = await c.next("joined");
+  const dJoined = await d.next("joined");
+  await c.next("state");
+  await d.next("state");
+  const casualRoom = roomAt(rooms, casualJoined.code);
+  assert.equal(casualRoom.mode, "public");
+  assert.equal(
+    (await productStore.getMatch(casualRoom.matchId ?? ""))?.mode,
+    "public",
+  );
+  const impostorIdentity = await createIdentity("冒用配對座位");
+  const impostor = await client(url, impostorIdentity.token);
+  impostor.send({
+    type: "join",
+    code: casualJoined.code,
+    token: dJoined.token,
+  });
+  assert.match((await impostor.next("error")).message, /相同玩家身份/);
 });
 
 void test("riichi supports four private seats, pauses, and reconnects", async (t) => {

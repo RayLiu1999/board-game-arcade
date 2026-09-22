@@ -14,7 +14,7 @@ export const PRODUCT_SCHEMA_VERSION = 1;
 export const MATCH_EVENT_SCHEMA_VERSION = 1;
 
 export type UserStatus = "active" | "suspended" | "deactivated";
-export type MatchMode = "ai" | "local" | "friend" | "rated";
+export type MatchMode = "ai" | "local" | "friend" | "public" | "rated";
 export type MatchStatus = "active" | "completed" | "cancelled" | "aborted";
 export type ParticipantResult = "win" | "loss" | "draw" | "unknown";
 

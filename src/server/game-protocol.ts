@@ -24,6 +24,14 @@ export async function handleClientMessage(
     await roomManager.handleEntry(socket, message);
     return;
   }
+  if (message.type === "matchmake") {
+    await roomManager.enqueueMatchmaking(socket, message);
+    return;
+  }
+  if (message.type === "matchmake-cancel") {
+    await roomManager.cancelMatchmaking(socket, message.ticket);
+    return;
+  }
   if (message.type === "leave") {
     await roomManager.detach(socket);
     send(socket, { type: "left" });

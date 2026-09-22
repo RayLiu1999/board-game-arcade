@@ -11,6 +11,7 @@ export type SocketSide = PlayerSide | RiichiSide;
 export interface ClientSocket extends WebSocket {
   alive: boolean;
   room: string | null;
+  matchmakingTicketId: string | null;
   side: SocketSide;
   chatWindowStartedAt: number;
   chatMessageCount: number;

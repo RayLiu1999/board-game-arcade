@@ -231,7 +231,9 @@
           ><button type="button" class="mode-option" data-mode="online">
             <span>♧</span>線上好友<small>建立私人房間</small></button
           ><button type="button" class="mode-option" data-mode="rated">
-            <span>♜</span>競技房<small>以 ELO 計分</small>
+            <span>♜</span>競技房<small>以 ELO 計分</small></button
+          ><button type="button" class="mode-option" data-mode="matchmaking">
+            <span>⚔</span>公開配對<small>立即找對手</small>
           </button>
         </div>
         <div id="ai-options" class="form-grid">
@@ -265,6 +267,13 @@
             <option value="0">單局練習 · 結算後結束</option>
             <option value="1" selected>東風戰 · 東一至東四</option>
             <option value="2">半莊戰 · 東場與南場</option>
+          </select>
+        </div>
+        <div id="matchmaking-options" hidden>
+          <label for="matchmaking-mode">配對類型</label
+          ><select id="matchmaking-mode">
+            <option value="rated">競技 rated · 更新 ELO</option>
+            <option value="casual">休閒 unrated · 不計分</option>
           </select>
         </div>
         <div id="name-options" hidden>

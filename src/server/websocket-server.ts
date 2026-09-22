@@ -30,6 +30,7 @@ export const attachWebSocketServer = (
     const socket = asClientSocket(rawSocket);
     socket.alive = true;
     socket.room = null;
+    socket.matchmakingTicketId = null;
     socket.side = 1;
     socket.chatWindowStartedAt = 0;
     socket.chatMessageCount = 0;

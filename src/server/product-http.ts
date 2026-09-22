@@ -23,7 +23,13 @@ import {
 } from "./product-store.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
-const modes: readonly MatchMode[] = ["ai", "local", "friend", "rated"];
+const modes: readonly MatchMode[] = [
+  "ai",
+  "local",
+  "friend",
+  "public",
+  "rated",
+];
 
 export interface ProductHttpDependencies {
   readonly identity: ProductIdentityService;
