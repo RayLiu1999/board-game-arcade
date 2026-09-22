@@ -468,3 +468,52 @@ P3-5 讓產品功能在真實流量、錯誤與部署變更下仍可被維護。
 - PostgreSQL backup 能在隔離環境成功 restore，並有記錄的 RTO／RPO 與演練步驟。
 - 引入 Redis 前已有 abstraction；Redis 只承擔可重建的協調資料，PostgreSQL 仍保護正式產品資料。
 - migration、前端 bundle 與 WebSocket schema 有相容策略，部署失敗能停止在安全狀態而不是半套資料。
+
+## P3 建議實作順序
+
+P3 可以先開始規劃與實作，但不建議把所有 P3 功能視為同一個大版本。建議使用下面的切片，每一段都能獨立部署、測試與回復。
+
+| 順序 | 交付切片           | 主要內容                                                      | 為什麼先／後做                                             |
+| ---- | ------------------ | ------------------------------------------------------------- | ---------------------------------------------------------- |
+| P3-A | 身份與對局資料底座 | users、sessions、matches、participants、最小事件、權限、audit | 沒有穩定身份與完成紀錄，後續功能都會各自猜資料             |
+| P3-B | 歷史與基本個人頁   | history API、guest 升級、個人偏好、基本統計                   | 先驗證玩家是否願意累積資料，成本比公開配對低               |
+| P3-C | rated 與公開配對   | ELO、rated policy、queue、取消與斷線規則                      | 需要先有可靠的 match 結果與身份                            |
+| P3-D | 體驗與可及性       | PWA、深色模式、鍵盤、螢幕閱讀器、i18n                         | 可與後端平行，但要以穩定的前端 state 與 message key 為前提 |
+| P3-E | 觀戰、計時與賽事   | public view、server clock、spectator、tournament fixture      | 需要事件廣播、權限與終局規則成熟                           |
+| P3-F | 留存與商業化       | 每日挑戰、賽季、外觀 inventory、AI 分析                       | 需要歷史資料、成本控制與權益邊界                           |
+| P3-G | 多實例與高流量     | Redis adapter、跨節點 presence／queue／event bus              | 由 metrics 驅動，不以預測流量作為唯一理由                  |
+
+### P3 與 P2 的關係
+
+P3-A 需要「最小可追溯事件契約」，這是從 P2 的 replay／versioned schema 借用的基礎，但不代表要先完成所有 P2 使用者介面。可以先定義並保存一般棋類 move event 與日麻 public event，之後再交付完整 replay viewer、分享連結與匯出檔案。
+
+同樣地，P3 的個人統計需要 P2 的資料聚合觀念；P3 的每日挑戰需要可重現的局面與規則版本；P3 的 AI 分析需要 match snapshot 或 event replay。這些是依賴關係，不是把所有 P2 專案一次搬進 P3 的理由。
+
+### 第一個 P3 implementation slice
+
+最適合先落地的是 P3-A，範圍可以控制在：
+
+1. 新增 `users`、`sessions`、`matches`、`match_participants` 與 `match_events` migration。
+2. 定義 `UserStore`、`SessionStore`、`MatchStore` 與事件寫入的 application abstraction；不要讓 HTTP／WebSocket handler 直接散落 SQL。
+3. 將一般棋類的正常終局從 active room snapshot 轉成一筆 idempotent match result。
+4. 為 guest 保留原本房間流程，再增加 optional user identity，不強制所有現有流程立即登入。
+5. 先補 PostgreSQL integration test、重啟／重送測試、權限測試與日麻暗牌隔離測試。
+
+這一片完成後，才開始把 history、rating、matchmaking 與個人頁接上；若底座測試尚未穩定，先不要引入 Redis、支付或複雜賽季邏輯。
+
+## P3 的整體完成定義
+
+P3 不以「所有列出的功能都存在」作為唯一完成條件，而以產品能安全運作作為完成條件：
+
+- 玩家可以保留身份、找回歷史、邀請好友並在公開規則下找到對手。
+- 一般棋類與日麻都維持伺服器權威；rated、觀戰、計時與隱藏資訊有可測試的邊界。
+- 玩家不登入也仍能使用既有核心玩法；登入、付費、觀戰與 PWA 都是漸進式能力。
+- 付費外觀與分析有清楚的 entitlement、配額、退款／撤銷與不影響公平的規則。
+- 所有重要 match、rating、獎勵與管理操作可由事件、版本與 audit record 追溯。
+- 服務有 log、metrics、health、限流、備份與恢復流程；多實例只在單實例指標顯示需要時加入。
+- 每一個交付切片都有 migration、automated tests、部署說明與可回復方案，而不是只在本機畫面上完成。
+
+## 相關文件
+
+- [架構、棋種演算法與產品化路線](./ARCHITECTURE_AND_PRODUCT_ROADMAP.md)：目前架構、P0／P1／P2／P3 的總覽。
+- 本文件：P3 各功能的用途、邊界、MVP、依賴與建議交付順序。
