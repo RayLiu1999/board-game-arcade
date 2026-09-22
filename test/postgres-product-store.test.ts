@@ -102,6 +102,40 @@ if (!databaseUrl) {
         description: "棋聚玩家身份與基本個人資料。",
       },
     ]);
+    const missingColumnComments = await cleanup.query<{
+      table_name: string;
+      column_name: string;
+    }>(
+      `
+        SELECT
+          c.relname AS table_name,
+          a.attname AS column_name
+        FROM pg_class AS c
+        JOIN pg_namespace AS n ON n.oid = c.relnamespace
+        JOIN pg_attribute AS a ON a.attrelid = c.oid
+        WHERE n.nspname = current_schema()
+          AND c.relkind = 'r'
+          AND c.relname = ANY($1::text[])
+          AND a.attnum > 0
+          AND NOT a.attisdropped
+          AND col_description(c.oid, a.attnum) IS NULL
+        ORDER BY c.relname, a.attnum
+      `,
+      [
+        [
+          "qiju_audit_log",
+          "qiju_match_events",
+          "qiju_match_participants",
+          "qiju_matches",
+          "qiju_room_players",
+          "qiju_rooms",
+          "qiju_sessions",
+          "qiju_user_preferences",
+          "qiju_users",
+        ],
+      ],
+    );
+    assert.deepEqual(missingColumnComments.rows, []);
     const user = await store.createUser({
       id: userId,
       displayName: "資料庫玩家",

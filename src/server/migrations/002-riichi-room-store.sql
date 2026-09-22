@@ -1,6 +1,8 @@
 ALTER TABLE qiju_rooms
   ADD COLUMN IF NOT EXISTS riichi_json jsonb;
 
+COMMENT ON COLUMN qiju_rooms.riichi_json IS '日麻進行中的 session 快照。';
+
 ALTER TABLE qiju_rooms
   DROP CONSTRAINT IF EXISTS qiju_rooms_game_check,
   DROP CONSTRAINT IF EXISTS qiju_rooms_game_check_v2;
