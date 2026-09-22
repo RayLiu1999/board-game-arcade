@@ -29,11 +29,11 @@ QIJU_TEST_DATABASE_URL='postgresql://user:password@host:5432/qiju_test'
 
 ### Docker Compose
 
-需要 Docker Desktop 或其他相容 Docker Compose 的環境。Compose 會啟動 Node.js 應用程式與 PostgreSQL；資料庫由 `qiju-postgres-data` named volume 保存，app 會等待 PostgreSQL 通過 healthcheck 後再啟動，伺服器啟動時會自動執行 migration：
+需要 Docker Desktop 或其他相容 Docker Compose 的環境。Compose 會啟動 Node.js 應用程式，並使用 `DATABASE_URL` 連線到外部 PostgreSQL；伺服器啟動時會自動執行 migration：
 
 ```sh
 cp .env.docker.example .env.docker
-# 編輯 .env.docker，至少替換 QIJU_POSTGRES_PASSWORD
+# 編輯 .env.docker，填入線上 PostgreSQL 的 DATABASE_URL
 docker compose --env-file .env.docker up --build -d
 ```
 
@@ -45,7 +45,7 @@ docker compose --env-file .env.docker logs -f app
 docker compose --env-file .env.docker down
 ```
 
-Compose 的預設設定使用內建的 `postgres` service，不會讀取現有 `.env` 的外部 `DATABASE_URL`；因此本機已有線上 PostgreSQL 設定時，請保留 `--env-file .env.docker`。`QIJU_POSTGRES_PASSWORD` 會直接組成 PostgreSQL URI，請使用 URL-safe 字元（例如 `openssl rand -hex 24` 產生的值）。`down` 不會刪除資料 volume；只有在確認要清除所有 Compose 資料時才使用 `docker compose --env-file .env.docker down -v`。
+如果已經在根目錄 `.env` 設定 `DATABASE_URL`，也可以直接執行 `docker compose up --build -d`。Compose 不會建立或管理 PostgreSQL volume；資料庫生命週期與備份由線上 PostgreSQL 服務負責。
 
 正式啟動時若設定 `DATABASE_URL`，線上房間會使用 PostgreSQL 保存一般棋類房間；未設定時使用 memory store，適合本機開發。可用 `QIJU_ROOM_STORE=memory` 強制使用 memory store：
 
