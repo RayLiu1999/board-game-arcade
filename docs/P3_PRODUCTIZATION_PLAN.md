@@ -395,3 +395,76 @@ P3-4 的目的，是讓玩家有持續回訪的理由，並探索可長期維護
 - AI 分析有 engine version、資源上限、配額與隱私邊界，不能在 rated 對局中提供即時作弊優勢。
 - 個人統計能區分棋種、模式與樣本數，且玩家能控制公開程度。
 - 每日挑戰、賽季與成就由固定規則產生，完成與獎勵可由事件和 audit record 追溯。
+
+## P3-5：營運、可靠性與未來擴充
+
+P3-5 讓產品功能在真實流量、錯誤與部署變更下仍可被維護。它不一定直接出現在玩家畫面，但會決定出問題時能不能定位、資料能不能恢復，以及何時有足夠理由從單實例擴展成多實例。
+
+### P3-5.1 結構化 log 與資料遮罩
+
+**用途：** 讓開發與營運能依時間、服務、request、room、match 或 user 追查問題，而不是只能閱讀無法搜尋的文字。
+
+**MVP：** 所有 server log 使用 JSON 或固定欄位格式，至少包含時間、level、service、environment、request ID 與 release version；對局相關錯誤再加 room／match ID。現有時間戳與 rotation 設定要延伸到 migration、WebSocket、AI job 與管理操作。
+
+**禁止內容：** 原始 session、房間 token、密碼、cookie、日麻暗牌、隨機 seed 與完整支付資料不可進 log。錯誤物件要先經過 redact；第三方錯誤追蹤也使用同一套遮罩規則。
+
+### P3-5.2 Metrics、health check 與 readiness
+
+**用途：** 分辨「程序活著」與「真的能接新流量」，並用數據知道玩家是否遇到延遲、斷線或資料庫壅塞。
+
+**MVP：** 暴露 liveness 與 readiness；readiness 至少檢查必要的 PostgreSQL 連線與 migration 狀態。記錄低 cardinality 的 metrics，例如 active rooms、WebSocket connections、matchmaking queue size、move latency、reconnect count、DB pool 使用量、migration failure 與 error rate。
+
+**設計原則：** 不把 room ID、user ID、session ID 或任意 URL 當成 metrics label，避免高基數拖垮監控系統。重要的 player-facing 錯誤要有 request ID，讓客服能從畫面回報到 server log。
+
+### P3-5.3 錯誤追蹤與告警
+
+**用途：** 將未處理例外、WebSocket 協定錯誤、資料庫故障與前端 render 問題聚合，讓團隊優先修復真正影響玩家的問題。
+
+**MVP：** 為 server、browser 與 Worker 定義 release version；錯誤事件包含 stack、操作類型、棋種、match mode 與 request ID，但不帶私密 payload。對資料庫連線耗盡、migration 失敗、錯誤率升高、重連率異常與 queue 等待過久設定告警門檻。
+
+**告警規則：** 告警要有 runbook、負責人與降噪方式；不是每個玩家操作錯誤都發 page alert。可以先以 log／metrics 為主，等資料量足夠再導入完整第三方 error tracking。
+
+### P3-5.4 API、WebSocket 與房間限流
+
+**用途：** 防止惡意或失控客戶端耗盡連線、資料庫、AI 計算與 broadcast 資源，保護正常玩家。
+
+**MVP：** 分別限制 IP、user、room 與 connection 的建立頻率；限制 WebSocket message size、每秒訊息數、單房間觀戰人數與 matchmaking ticket 數。建立房間、登入、好友邀請、AI 分析、每日挑戰提交與管理 API 使用不同的 quota。
+
+**錯誤回應：** 被限流時回傳穩定 error code、retry-after 與 request ID；不要讓前端無限重試。限流的 key 不可只用 IP，否則共享網路會誤傷多人；也不可只用 user，否則匿名流量可繞過。
+
+### P3-5.5 PostgreSQL 備份與恢復演練
+
+**用途：** 確保帳號、完成對局、rating、inventory 與賽事資料在資料庫故障或誤操作後可以恢復。
+
+**MVP：** 定義 backup frequency、保留期限、加密位置與誰能執行 restore；至少定期測試能在隔離環境還原 migration 後的 schema 與代表性資料。把 RTO（恢復時間目標）與 RPO（可接受資料遺失量）寫入部署文件。
+
+**資料分層：** 進行中房間 snapshot 可依 TTL 清理；已完成 match、rating 與購買權益需要較長保留。backup 不等於 event replay，恢復資料庫後仍要確認 `sequence`、唯一鍵與 idempotency 不會造成重複結算。
+
+### P3-5.6 Redis 與多實例部署
+
+**用途：** 當單一 Node.js process 無法承受連線或需要多台應用程式時，提供跨實例的 ephemeral coordination，例如 presence、matchmaking queue、pub/sub 與分散式鎖。
+
+**何時才做：** 目前單實例＋PostgreSQL 足以支撐時，不因「未來可能需要」提前增加 Redis 故障面。出現多實例部署、WebSocket 連線分散、queue 需要跨節點或 broadcast 延遲明顯時，才以實際 metrics 啟動這項工作。
+
+**責任分界：** PostgreSQL 仍是帳號、match 結果、rating、inventory 與需要恢復的資料之 source of truth；Redis 只保存可重建的 queue、presence、短期 lock 或 pub/sub。Redis 遺失時不能讓已完成對局消失或重新結算。
+
+**MVP：** 先引入 adapter，例如 `PresenceStore`、`MatchmakingStore` 與 `EventBus`，單實例可使用記憶體實作，Redis 是另一個實作。這樣測試與本機開發不必強制依賴 Redis，也避免把 Redis API 散落在 server handler。
+
+### P3-5.7 部署與版本相容
+
+**用途：** 讓 migration、應用程式、前端 bundle 與 WebSocket schema 的更新可以可預期地進行，降低部署造成大規模斷線或資料不相容的風險。
+
+**MVP：** 維持現有 one-shot migration service 與 app service 分離；部署前執行 typecheck、lint、format、build、一般測試與 PostgreSQL integration test。schema 採向前相容的 expand／migrate／contract 節奏，先新增欄位與讀取支援，再移除舊欄位。
+
+**WebSocket 相容：** message schema 帶版本或可辨識的 command；新 server 至少能理解一段相容期間內的舊 client，舊 client 收到未知事件時要安全忽略或顯示重新載入，而不是讓整個連線崩潰。
+
+### P3-5.8 P3-5 的驗收標準
+
+完成 P3-5 的最低標準是：
+
+- 從 log、request ID 與 metrics 可以定位一筆對局或一次 migration 失敗，但不會洩漏 token、密碼或隱藏牌。
+- health 與 readiness 能區分程序活著、資料庫可用與 migration 是否完成。
+- 主要資源有可觀測的上限與限流，超過限制時不會造成無限重試或整個 server 崩潰。
+- PostgreSQL backup 能在隔離環境成功 restore，並有記錄的 RTO／RPO 與演練步驟。
+- 引入 Redis 前已有 abstraction；Redis 只承擔可重建的協調資料，PostgreSQL 仍保護正式產品資料。
+- migration、前端 bundle 與 WebSocket schema 有相容策略，部署失敗能停止在安全狀態而不是半套資料。
