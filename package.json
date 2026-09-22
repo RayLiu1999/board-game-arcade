@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env --import=tsx src/server/server.ts",
     "dev": "node --env-file-if-exists=.env --import=tsx --watch src/server/server.ts",
+    "migrate": "node --env-file-if-exists=.env --import=tsx scripts/migrate.ts",
     "test": "node --env-file-if-exists=.env --import=tsx --test test/*.ts",
     "test:postgres": "node --env-file-if-exists=.env --import=tsx --test test/postgres-room-store.test.ts test/server.test.ts",
     "typecheck": "tsc --noEmit",
