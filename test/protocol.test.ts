@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  CHAT_MAX_LENGTH,
   GAME_IDS,
   isBoardMove,
   isGameId,
@@ -66,6 +67,10 @@ register("protocol parser normalizes supported room and game commands", () => {
     parseClientMessage({ type: "riichi-action", actionId: "3:0:2" }),
     { type: "riichi-action", actionId: "3:0:2" },
   );
+  assert.deepEqual(parseClientMessage({ type: "chat", text: "  你好 🀄  " }), {
+    type: "chat",
+    text: "你好 🀄",
+  });
   assert.deepEqual(parseClientMessage({ type: "dead", to: 40 }), {
     type: "dead",
     to: 40,
@@ -82,6 +87,10 @@ register("protocol parser rejects invalid messages at the boundary", () => {
   rejectsMessage({ type: "move", ply: 0, move: { to: "40" } });
   rejectsMessage({ type: "move", ply: 0, move: { to: 40, pass: "true" } });
   rejectsMessage({ type: "riichi-action", actionId: 3 });
+  rejectsMessage({ type: "chat", text: "" });
+  rejectsMessage({ type: "chat", text: " ".repeat(2) });
+  rejectsMessage({ type: "chat", text: "🙂".repeat(CHAT_MAX_LENGTH + 1) });
+  rejectsMessage({ type: "chat", text: "不允\u0000許" });
   rejectsMessage({ type: "dead", to: "40" });
   rejectsMessage({ type: "unknown" });
 });

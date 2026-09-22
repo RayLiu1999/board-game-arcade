@@ -1,10 +1,16 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import { WebSocket } from "ws";
 
 import { RiichiSession } from "../../lib/riichi-session.js";
 import { createGame } from "../shared/engine.js";
-import type { ClientMessage } from "../shared/protocol.js";
+import {
+  CHAT_HISTORY_LIMIT,
+  CHAT_RATE_LIMIT_COUNT,
+  CHAT_RATE_LIMIT_WINDOW_MS,
+  type ChatMessage,
+  type ClientMessage,
+} from "../shared/protocol.js";
 import {
   type ClientSocket,
   type RiichiSide,
@@ -221,6 +227,40 @@ export class RoomManager {
     });
   }
 
+  async sendChat(
+    room: Room,
+    socket: ClientSocket,
+    text: string,
+  ): Promise<void> {
+    const player = room.players.find((entry) => entry?.socket === socket);
+    if (!player) throw new Error("只有房間玩家可以聊天");
+    const now = this.now();
+    if (
+      socket.chatWindowStartedAt === 0 ||
+      now - socket.chatWindowStartedAt >= CHAT_RATE_LIMIT_WINDOW_MS
+    ) {
+      socket.chatWindowStartedAt = now;
+      socket.chatMessageCount = 0;
+    }
+    if (socket.chatMessageCount >= CHAT_RATE_LIMIT_COUNT)
+      throw new Error("聊天室訊息過於頻繁，請稍後再試");
+    socket.chatMessageCount += 1;
+    if (!room.matchId) throw new Error("對局尚未建立");
+    const message: ChatMessage = {
+      id: randomUUID(),
+      matchId: room.matchId,
+      sequence: (room.chat.at(-1)?.sequence ?? 0) + 1,
+      side: socket.side,
+      name: player.name,
+      text,
+      createdAt: now,
+    };
+    room.chat = [...room.chat, message].slice(-CHAT_HISTORY_LIMIT);
+    this.touch(room);
+    await this.persist(room);
+    this.broadcastChat(room, message);
+  }
+
   async beginRematch(room: Room): Promise<void> {
     await this.completeMatchIfDone(room);
     if (room.state.game === "riichi") {
@@ -238,6 +278,7 @@ export class RoomManager {
     room.matchId = match.id;
     room.eventSequence = 0;
     room.pendingEvents = [];
+    room.chat = [];
     await this.syncParticipants(room);
   }
 
@@ -376,7 +417,15 @@ export class RoomManager {
             : null,
         ),
         rematch: room.rematch,
+        chat: room.chat,
       });
+    });
+  }
+
+  private broadcastChat(room: Room, message: ChatMessage): void {
+    room.players.forEach((player) => {
+      if (player?.socket)
+        this.sendMessage(player.socket, { type: "chat", message });
     });
   }
 
@@ -522,6 +571,7 @@ export class RoomManager {
         session: null,
         eventSequence: 0,
         pendingEvents: [],
+        chat: [],
       };
       await this.ensureMatch(room);
       await this.createPersistentRoom(room);
@@ -666,4 +716,5 @@ const restore = (snapshot: RoomSnapshot): Room => ({
   ...(snapshot.matchId === undefined ? {} : { matchId: snapshot.matchId }),
   eventSequence: snapshot.eventSequence ?? 0,
   pendingEvents: [],
+  chat: [],
 });

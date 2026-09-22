@@ -1,3 +1,5 @@
+import type { ChatMessage } from "../shared/protocol.js";
+
 const winds = ["東", "南", "西", "北"] as const;
 
 interface RiichiChoice {
@@ -82,6 +84,7 @@ export interface RoomView {
   readonly code?: string;
   readonly players?: Array<RoomPlayer | null>;
   readonly rematch?: number[];
+  readonly chat?: readonly ChatMessage[];
 }
 
 export interface RenderOptions {

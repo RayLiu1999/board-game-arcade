@@ -46,6 +46,11 @@ async function handleRoomMessage(
   const room = rooms.get(socket.room);
   if (!room) throw new Error("尚未加入房間");
 
+  if (message.type === "chat") {
+    await roomManager.sendChat(room, socket, message.text);
+    return;
+  }
+
   if (message.type === "riichi-start") {
     if (room.state.game !== "riichi" || socket.side !== 1 || room.session)
       throw new Error("只有房主可在開局前補入 AI");

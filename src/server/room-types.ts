@@ -2,7 +2,7 @@ import type { WebSocket } from "ws";
 
 import type { RiichiSession } from "../../lib/riichi-session.js";
 import type { GameState } from "../shared/game-types.js";
-import type { PlayerSide } from "../shared/protocol.js";
+import type { ChatMessage, PlayerSide } from "../shared/protocol.js";
 import type { AppendMatchEventInput } from "./product-store.js";
 
 export type RiichiSide = 1 | 2 | 3 | 4;
@@ -12,6 +12,8 @@ export interface ClientSocket extends WebSocket {
   alive: boolean;
   room: string | null;
   side: SocketSide;
+  chatWindowStartedAt: number;
+  chatMessageCount: number;
   userId?: string;
 }
 
@@ -44,4 +46,5 @@ export interface Room {
   matchId?: string;
   eventSequence: number;
   pendingEvents: AppendMatchEventInput[];
+  chat: ChatMessage[];
 }

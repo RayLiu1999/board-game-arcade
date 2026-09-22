@@ -30,6 +30,18 @@ test("players can create a room, join it, and make a move", async ({
   await expect(page.locator("#turn-detail")).toContainText("輪到你落子");
   await expect(guest.locator("#turn-detail")).toContainText("等待對手落子");
 
+  await expect(page.locator("#chat-panel")).toBeVisible();
+  await expect(guest.locator("#chat-panel")).toBeVisible();
+  await page.locator("#chat-input").fill("你好 🀄");
+  await page.locator('#chat-form button[type="submit"]').click();
+  await expect(guest.locator("#chat-messages")).toContainText("你好 🀄");
+  await expect(guest.locator("#chat-messages")).toContainText("房主");
+
+  await guest.locator('#chat-emoji button[aria-label="鼓掌"]').click();
+  await expect(guest.locator("#chat-input")).toHaveValue("👏");
+  await guest.locator('#chat-form button[type="submit"]').click();
+  await expect(page.locator("#chat-messages")).toContainText("👏");
+
   await page.locator('#board .cell[data-cell="52"]').click();
   await expect(page.locator('#board .cell[data-cell="36"]')).toHaveClass(
     /legal/,

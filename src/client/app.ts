@@ -19,7 +19,13 @@ import type {
   PlayerSide,
   RiichiWaitingState,
 } from "../shared/game-types.js";
-import { GAME_IDS, isGameId } from "../shared/protocol.js";
+import {
+  CHAT_HISTORY_LIMIT,
+  CHAT_MAX_LENGTH,
+  GAME_IDS,
+  isGameId,
+  type ChatMessage,
+} from "../shared/protocol.js";
 import type { Difficulty } from "./ai.js";
 
 type Mode = "ai" | "local" | "online";
@@ -31,6 +37,7 @@ interface ClientRoom extends RoomView {
   readonly code: string;
   readonly token: string;
   readonly side: number;
+  readonly chat: readonly ChatMessage[];
 }
 
 interface RoomResume {
@@ -40,6 +47,7 @@ interface RoomResume {
 
 interface DomElement extends HTMLElement {
   value: string;
+  maxLength: number;
   disabled: boolean;
   options: HTMLOptionsCollection;
   showModal(): void;
@@ -67,6 +75,12 @@ interface RoomStateMessage {
   readonly state: BoardState | AppRiichiState | RiichiWaitingState;
   readonly players: RoomView["players"];
   readonly rematch: number[];
+  readonly chat: readonly ChatMessage[];
+}
+
+interface ChatSocketMessage {
+  readonly type: "chat";
+  readonly message: ChatMessage;
 }
 
 interface SocketErrorMessage {
@@ -74,7 +88,11 @@ interface SocketErrorMessage {
   readonly message: string;
 }
 
-type SocketMessage = JoinedMessage | RoomStateMessage | SocketErrorMessage;
+type SocketMessage =
+  | JoinedMessage
+  | RoomStateMessage
+  | ChatSocketMessage
+  | SocketErrorMessage;
 
 interface AiResponse {
   readonly id: number;
@@ -607,7 +625,13 @@ function connect(): Promise<void> {
         riichiWorker?.terminate();
         riichiWorker = null;
         riichiHandoff = null;
-        room = { ...room, code: msg.code, token: msg.token, side: msg.side };
+        room = {
+          ...room,
+          code: msg.code,
+          token: msg.token,
+          side: msg.side,
+          chat: room?.chat ?? [],
+        };
         session.set({ code: msg.code, token: msg.token });
         human = msg.side;
         mode = "online";
@@ -618,7 +642,12 @@ function connect(): Promise<void> {
       if (msg.type === "state") {
         if (!room || room.code !== msg.code) return;
         const fresh = $("#play-screen").hidden;
-        room = { ...room, players: msg.players ?? [], rematch: msg.rematch };
+        room = {
+          ...room,
+          players: msg.players ?? [],
+          rematch: msg.rematch,
+          chat: msg.chat,
+        };
         state = normalizeState(
           msg.state,
           Number($("#riichi-rounds").value) || 1,
@@ -628,6 +657,15 @@ function connect(): Promise<void> {
         selected = null;
         if (fresh) showGame();
         else render();
+      }
+      if (msg.type === "chat") {
+        if (!room) return;
+        if (room.chat.some((entry) => entry.id === msg.message.id)) return;
+        room = {
+          ...room,
+          chat: [...room.chat, msg.message].slice(-CHAT_HISTORY_LIMIT),
+        };
+        renderChat();
       }
       if (msg.type === "error") {
         networkBusy = false;
@@ -690,6 +728,7 @@ function send(
   type:
     | "move"
     | "riichi-action"
+    | "chat"
     | "riichi-start"
     | "resign"
     | "rematch"
@@ -703,8 +742,64 @@ function send(
     return;
   }
   socket.send(JSON.stringify({ type, ...extra }));
-  networkBusy = true;
+  if (type !== "chat") networkBusy = true;
 }
+function renderChat(): void {
+  const panel = $("#chat-panel");
+  const messages = $("#chat-messages");
+  const input = $("#chat-input");
+  const visible = mode === "online" && room !== null;
+  panel.hidden = !visible;
+  if (!visible || !room) {
+    messages.replaceChildren();
+    input.value = "";
+    return;
+  }
+  const currentRoom = room;
+  messages.replaceChildren(
+    ...currentRoom.chat.map((message) => {
+      const item = document.createElement("article");
+      item.className = `chat-message${
+        message.side === currentRoom.side ? " mine" : ""
+      }`;
+      const meta = document.createElement("div");
+      meta.className = "chat-meta";
+      const time = new Date(message.createdAt).toLocaleTimeString("zh-TW", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      meta.textContent = `${message.name} · ${time}`;
+      const body = document.createElement("p");
+      body.textContent = message.text;
+      item.append(meta, body);
+      return item;
+    }),
+  );
+  messages.scrollTop = messages.scrollHeight;
+  input.disabled = !connected;
+}
+$("#chat-form").onsubmit = (event) => {
+  event.preventDefault();
+  const input = $("#chat-input");
+  const text = input.value.trim();
+  if (!text || mode !== "online") return;
+  send("chat", { text });
+  input.value = "";
+  renderChat();
+};
+$("#chat-input").maxLength = CHAT_MAX_LENGTH;
+$$("#chat-emoji button").forEach(
+  (button) =>
+    (button.onclick = () => {
+      const input = $("#chat-input");
+      if (input.disabled) return;
+      input.value = `${input.value}${button.textContent}`.slice(
+        0,
+        CHAT_MAX_LENGTH,
+      );
+      input.focus();
+    }),
+);
 function canPlay(): boolean {
   if (!isBoardState(state)) return false;
   return (
@@ -720,6 +815,7 @@ function canPlay(): boolean {
 function render(): void {
   const current = state;
   if (!current) return;
+  renderChat();
   const mahjong = current.game === "riichi";
   $(".play-layout").hidden = mahjong;
   $("#riichi-table").hidden = !mahjong;
@@ -1342,7 +1438,7 @@ if (invite) {
   $("#join-code").value = invite.toUpperCase();
   openJoin();
 } else if (savedRoom) {
-  room = { ...savedRoom, side: 1 };
+  room = { ...savedRoom, side: 1, chat: [] };
   mode = "online";
   connect()
     .then(() => {

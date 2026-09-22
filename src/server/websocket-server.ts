@@ -31,6 +31,8 @@ export const attachWebSocketServer = (
     socket.alive = true;
     socket.room = null;
     socket.side = 1;
+    socket.chatWindowStartedAt = 0;
+    socket.chatMessageCount = 0;
     const token = sessionTokenFromCookie(request.headers.cookie);
     const identityReady = token
       ? (identity?.authenticate(token) ?? Promise.resolve(null))

@@ -173,6 +173,47 @@
             <div class="fair-note">✧ 每一步思考，都是進步。</div>
           </aside>
         </div>
+        <section
+          id="chat-panel"
+          class="chat-panel"
+          hidden
+          aria-labelledby="chat-title"
+        >
+          <div class="chat-heading">
+            <div>
+              <div class="eyebrow dark">PLAY TOGETHER</div>
+              <h2 id="chat-title">對戰聊天室</h2>
+            </div>
+            <span>只有本房間玩家可見</span>
+          </div>
+          <div
+            id="chat-messages"
+            class="chat-messages"
+            role="log"
+            aria-live="polite"
+          ></div>
+          <form id="chat-form" class="chat-form">
+            <div class="chat-input-row">
+              <input
+                id="chat-input"
+                maxlength="500"
+                autocomplete="off"
+                placeholder="說點什麼吧…"
+                aria-label="聊天室訊息"
+              />
+              <button class="button primary" type="submit">送出</button>
+            </div>
+            <div id="chat-emoji" class="chat-emoji" aria-label="加入 emoji">
+              <span>快速加入</span>
+              <button type="button" aria-label="笑臉">🙂</button>
+              <button type="button" aria-label="鼓掌">👏</button>
+              <button type="button" aria-label="加油">💪</button>
+              <button type="button" aria-label="驚訝">😮</button>
+              <button type="button" aria-label="好棋">♟️</button>
+              <button type="button" aria-label="麻將">🀄</button>
+            </div>
+          </form>
+        </section>
       </main>
     </div>
     <dialog id="setup-dialog">

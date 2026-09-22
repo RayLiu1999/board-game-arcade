@@ -7,6 +7,8 @@ import { WebSocket, type RawData } from "ws";
 import { PostgresProductStore } from "../src/server/postgres-product-store.js";
 import { createServer } from "../src/server/server.js";
 import { PostgresRoomStore } from "../src/server/postgres-room-store.js";
+import { CHAT_RATE_LIMIT_COUNT } from "../src/shared/protocol.js";
+import type { ChatMessage } from "../src/shared/protocol.js";
 import type {
   GameState,
   NumericBoardState,
@@ -39,13 +41,24 @@ interface StateMessage {
   readonly state: GameState | RiichiView;
   readonly players: Array<WirePlayer | null>;
   readonly rematch: number[];
+  readonly chat: ChatMessage[];
+}
+
+interface ChatMessageEvent {
+  readonly type: "chat";
+  readonly message: ChatMessage;
 }
 
 interface LeftMessage {
   readonly type: "left";
 }
 
-type ServerMessage = JoinedMessage | ErrorMessage | StateMessage | LeftMessage;
+type ServerMessage =
+  | JoinedMessage
+  | ErrorMessage
+  | StateMessage
+  | ChatMessageEvent
+  | LeftMessage;
 type ServerMessageType = ServerMessage["type"];
 type MessageOf<Type extends ServerMessageType> = Extract<
   ServerMessage,
@@ -187,11 +200,39 @@ void test("authoritative multiplayer rooms", async (t) => {
     a.send({ type: "move", ply: 0, move: { to: 112 } });
     assert.match((await a.next("error")).message, /等待/);
   });
+  await t.test("cannot chat before joining a room", async () => {
+    c.send({ type: "chat", text: "不應該送出" });
+    assert.match((await c.next("error")).message, /尚未加入/);
+  });
   b.send({ type: "join", code: joined.code, name: "乙" });
   const bJoined = await b.next("joined");
   assert.equal(bJoined.side, -1);
   await a.next("state");
   await b.next("state");
+  await t.test(
+    "players can exchange text and emoji without creating game events",
+    async () => {
+      a.send({ type: "chat", text: "你好 🀄" });
+      const fromA = await a.next("chat");
+      const fromB = await b.next("chat");
+      assert.deepEqual(fromA.message, fromB.message);
+      assert.equal(fromA.message.matchId, matchId);
+      assert.equal(fromA.message.name, "甲");
+      assert.equal(fromA.message.side, 1);
+      assert.equal(fromA.message.text, "你好 🀄");
+      assert.equal(roomAt(rooms, joined.code).chat.length, 1);
+      assert.equal((await productStore.listMatchEvents(matchId)).length, 0);
+    },
+  );
+  await t.test("chat rate limit rejects bursts", async () => {
+    for (let index = 1; index < CHAT_RATE_LIMIT_COUNT; index++) {
+      a.send({ type: "chat", text: `訊息 ${String(index)}` });
+      await a.next("chat");
+      await b.next("chat");
+    }
+    a.send({ type: "chat", text: "太快了" });
+    assert.match((await a.next("error")).message, /頻繁/);
+  });
   await t.test("rejects full rooms and out-of-turn moves", async () => {
     c.send({ type: "join", code: joined.code });
     assert.match((await c.next("error")).message, /已滿/);
@@ -231,6 +272,8 @@ void test("authoritative multiplayer rooms", async (t) => {
       await a.next("state");
       assert.equal(restored.state.ply, 1);
       assert.equal(item(restored.players, 1)?.name, "乙");
+      assert.equal(restored.chat.length, CHAT_RATE_LIMIT_COUNT);
+      assert.equal(restored.chat[0]?.text, "你好 🀄");
     },
   );
   await t.test("resignation and rematch require both players", async () => {

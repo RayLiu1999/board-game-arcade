@@ -13,6 +13,21 @@ export type GameId = (typeof GAME_IDS)[number];
 export type PlayerSide = 1 | -1;
 export type RiichiSeat = 0 | 1 | 2 | 3;
 
+export const CHAT_MAX_LENGTH = 500;
+export const CHAT_HISTORY_LIMIT = 50;
+export const CHAT_RATE_LIMIT_COUNT = 8;
+export const CHAT_RATE_LIMIT_WINDOW_MS = 10_000;
+
+export interface ChatMessage {
+  readonly id: string;
+  readonly matchId: string;
+  readonly sequence: number;
+  readonly side: number;
+  readonly name: string;
+  readonly text: string;
+  readonly createdAt: number;
+}
+
 export interface BoardMove {
   readonly from?: number;
   readonly to?: number;
@@ -49,6 +64,11 @@ export interface RiichiActionMessage {
   readonly actionId: string;
 }
 
+export interface ChatSendMessage {
+  readonly type: "chat";
+  readonly text: string;
+}
+
 export interface RoomCommandMessage {
   readonly type:
     | "leave"
@@ -66,6 +86,7 @@ export type ClientMessage =
   | JoinRoomMessage
   | MoveMessage
   | RiichiActionMessage
+  | ChatSendMessage
   | RoomCommandMessage;
 
 const COMMAND_TYPES = [
@@ -88,6 +109,26 @@ const isOptionalInteger = (value: unknown): value is number | undefined =>
 
 const isOptionalString = (value: unknown): value is string | undefined =>
   value === undefined || typeof value === "string";
+
+const hasControlCharacter = (value: string): boolean =>
+  Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return (
+      (codePoint >= 0 && codePoint <= 0x1f) ||
+      (codePoint >= 0x7f && codePoint <= 0x9f)
+    );
+  });
+
+export function normalizeChatText(value: unknown): string {
+  if (typeof value !== "string") throw new Error("聊天室訊息格式錯誤");
+  const text = value.normalize("NFC").trim();
+  if (!text) throw new Error("聊天室訊息不可為空白");
+  if (Array.from(text).length > CHAT_MAX_LENGTH)
+    throw new Error(`聊天室訊息不可超過 ${String(CHAT_MAX_LENGTH)} 個字元`);
+  if (hasControlCharacter(text))
+    throw new Error("聊天室訊息包含不允許的控制字元");
+  return text;
+}
 
 export function isBoardMove(value: unknown): value is BoardMove {
   if (!isRecord(value)) return false;
@@ -149,6 +190,9 @@ export function parseClientMessage(value: unknown): ClientMessage {
     if (typeof value.actionId !== "string") throw new Error("日麻操作格式錯誤");
     return { type: "riichi-action", actionId: value.actionId };
   }
+
+  if (value.type === "chat")
+    return { type: "chat", text: normalizeChatText(value.text) };
 
   if (
     COMMAND_TYPES.includes(value.type as (typeof COMMAND_TYPES)[number]) &&
