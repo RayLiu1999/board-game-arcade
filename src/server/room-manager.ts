@@ -59,6 +59,9 @@ export const send: SendMessage = (socket, data) => {
   if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(data));
 };
 
+const isSocketOpen = (socket: ClientSocket): boolean =>
+  socket.readyState === WebSocket.OPEN;
+
 const roomSide = (state: RoomState, index: number): SocketSide => {
   if (state.game !== "riichi") return index === 0 ? 1 : -1;
   const side = index + 1;
@@ -318,6 +321,8 @@ export class RoomManager {
               ? (await this.productStore.getUserRating(userId, message.game))
                   .rating
               : null;
+          if (!isSocketOpen(socket))
+            throw new Error("配對連線已中斷，請重新嘗試");
           if (this.matchmaking.size >= 500)
             throw new Error("公開配對目前已滿，請稍後再試");
           const result = this.matchmaking.enqueue({
@@ -335,7 +340,22 @@ export class RoomManager {
             this.sendMatchmakingStatus(socket, "waiting", result.ticket);
             return;
           }
-          await this.createMatchmadeRoom(result.ticket, result.match, socket);
+          const opponentSocket = this.matchmakingSockets.get(result.match.id);
+          try {
+            await this.createMatchmadeRoom(result.ticket, result.match, socket);
+          } catch (error) {
+            for (const [ticket, playerSocket] of [
+              [result.ticket, socket],
+              [result.match, opponentSocket],
+            ] as const) {
+              this.matchmakingSockets.delete(ticket.id);
+              if (!playerSocket) continue;
+              if (playerSocket.matchmakingTicketId === ticket.id)
+                playerSocket.matchmakingTicketId = null;
+              this.sendMatchmakingStatus(playerSocket, "cancelled", ticket);
+            }
+            throw error;
+          }
         });
       })(),
     );
@@ -356,10 +376,11 @@ export class RoomManager {
           Promise.resolve().then(() => {
             const ticketId = requestedTicket ?? socket.matchmakingTicketId;
             if (!ticketId) return;
+            if (ticketId !== socket.matchmakingTicketId)
+              throw new Error("無法取消其他連線的配對");
             const ticket = this.matchmaking.get(ticketId);
             if (!ticket) {
-              socket.matchmakingTicketId = null;
-              this.matchmakingSockets.delete(ticketId);
+              this.removeMatchmakingSocket(socket);
               return;
             }
             if (!socket.userId || ticket.userId !== socket.userId)
@@ -824,8 +845,8 @@ export class RoomManager {
     if (
       leftSocket.room ||
       rightSocket.room ||
-      leftSocket.readyState !== WebSocket.OPEN ||
-      rightSocket.readyState !== WebSocket.OPEN
+      !isSocketOpen(leftSocket) ||
+      !isSocketOpen(rightSocket)
     )
       throw new Error("配對對手已離線，請重新嘗試");
     const code = this.newRoomCode();
@@ -860,12 +881,41 @@ export class RoomManager {
       pendingEvents: [],
       chat: [],
     };
+    let persisted = false;
+    try {
+      await this.ensureMatch(room);
+      await this.createPersistentRoom(room);
+      persisted = true;
+      if (!isSocketOpen(leftSocket) || !isSocketOpen(rightSocket))
+        throw new Error("配對對手已離線，請重新嘗試");
+    } catch (error) {
+      const cleanup = await Promise.allSettled([
+        ...(persisted ? [this.store.delete(code)] : []),
+        ...(room.matchId
+          ? [
+              this.productStore.abortMatch({
+                matchId: room.matchId,
+                reason: "matchmaking_failed",
+                abortedAt: this.now(),
+              }),
+            ]
+          : []),
+      ]);
+      const cleanupErrors = cleanup.flatMap((result) =>
+        result.status === "rejected" ? [result.reason as unknown] : [],
+      );
+      if (cleanupErrors.length)
+        throw new AggregateError(
+          cleanupErrors,
+          "配對失敗且清理對局資料時發生錯誤",
+          { cause: error },
+        );
+      throw error;
+    }
     this.matchmakingSockets.delete(left.id);
     this.matchmakingSockets.delete(right.id);
     leftSocket.matchmakingTicketId = null;
     rightSocket.matchmakingTicketId = null;
-    await this.ensureMatch(room);
-    await this.createPersistentRoom(room);
     this.rooms.set(code, room);
     const tokens = [leftToken, rightToken];
     for (const [index, player] of room.players.entries()) {
