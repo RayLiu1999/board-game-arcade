@@ -80,7 +80,10 @@ export class MatchmakingQueue {
     return this.tickets.size;
   }
 
-  enqueue(input: MatchmakingTicketInput): EnqueueResult {
+  enqueue(
+    input: MatchmakingTicketInput,
+    excludedUserIds: ReadonlySet<string> = new Set(),
+  ): EnqueueResult {
     if (!input.userId) throw new Error("配對玩家身份不可為空");
     if (!Number.isFinite(input.createdAt))
       throw new Error("配對建立時間格式錯誤");
@@ -104,16 +107,12 @@ export class MatchmakingQueue {
       ticket.expiresAt <= ticket.createdAt
     )
       throw new Error("配對到期時間格式錯誤");
-    const opponent = [...this.tickets.values()]
-      .sort(
-        (left, right) =>
-          left.createdAt - right.createdAt || left.id.localeCompare(right.id),
-      )
-      .find(
-        (candidate) =>
-          candidate.expiresAt > input.createdAt &&
-          compatible(candidate, ticket, input.createdAt),
-      );
+    const opponent = [...this.tickets.values()].find(
+      (candidate) =>
+        candidate.expiresAt > input.createdAt &&
+        !excludedUserIds.has(candidate.userId) &&
+        compatible(candidate, ticket, input.createdAt),
+    );
     if (opponent) {
       this.remove(opponent);
       return { ticket, match: opponent };

@@ -5,6 +5,10 @@ import type {
   AuthenticatedIdentity,
   ProductIdentityService,
 } from "./product-identity.js";
+import {
+  InvalidCredentialsError,
+  LoginRateLimitError,
+} from "./product-identity.js";
 import type { ClaimedRoomIdentity } from "./room-manager.js";
 import {
   clearSessionCookie,
@@ -19,6 +23,7 @@ import {
   type MatchRecord,
   type ProductStore,
   type RatingRecord,
+  type RoomInvitationPreview,
   type UpdateUserPreferencesInput,
 } from "./product-store.js";
 
@@ -39,6 +44,11 @@ export interface ProductHttpDependencies {
     roomToken: string,
     userId: string,
   ) => Promise<ClaimedRoomIdentity>;
+  readonly createRoomInvitation: (
+    roomCode: string,
+    inviterId: string,
+    recipientId: string,
+  ) => Promise<RoomInvitationPreview>;
 }
 
 export type ProductHttpHandler = (
@@ -129,6 +139,9 @@ const publicUser = (
   identity: AuthenticatedIdentity | { user: AuthenticatedIdentity["user"] },
 ) => ({
   id: identity.user.id,
+  publicCode: identity.user.publicCode,
+  loginName: identity.user.loginName,
+  hasAccount: identity.user.loginName !== null,
   displayName: identity.user.displayName,
   status: identity.user.status,
   createdAt: identity.user.createdAt,
@@ -167,6 +180,26 @@ const optionalBoolean = (
   if (typeof value !== "boolean")
     throw new ProductHttpError(400, `${label}格式錯誤`);
   return value;
+};
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const requiredUuid = (value: string | undefined, label: string): string => {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized || !UUID_PATTERN.test(normalized))
+    throw new ProductHttpError(400, `${label}格式錯誤`);
+  return normalized;
+};
+
+const requiredFriendCode = (value: string | undefined): string => {
+  const normalized = value?.trim();
+  if (
+    !normalized ||
+    (!UUID_PATTERN.test(normalized) && !/^QJ-[0-9A-F]{10}$/i.test(normalized))
+  )
+    throw new ProductHttpError(400, "好友代碼格式錯誤");
+  return normalized.toUpperCase();
 };
 
 const optionalInteger = (
@@ -251,6 +284,10 @@ const publicRating = (rating: RatingRecord) => ({
 });
 
 const apiError = (error: unknown): { status: number; message: string } => {
+  if (error instanceof InvalidCredentialsError)
+    return { status: 401, message: error.message };
+  if (error instanceof LoginRateLimitError)
+    return { status: 429, message: error.message };
   if (error instanceof ProductHttpError)
     return { status: error.status, message: error.message };
   if (error instanceof ProductStoreNotFoundError)
@@ -301,6 +338,72 @@ export const createProductHttpHandler =
         return true;
       }
 
+      if (
+        url.pathname === "/api/account/upgrade" &&
+        request.method === "POST"
+      ) {
+        requireSameOrigin(request);
+        const authenticated = await requireIdentity(
+          request,
+          dependencies.identity,
+        );
+        const body = await readRecord(request);
+        const loginName = optionalString(body.loginName, "帳號");
+        const password = optionalString(body.password, "密碼");
+        if (!loginName || !password)
+          throw new ProductHttpError(400, "請輸入帳號與密碼");
+        if (!/^[a-z0-9][a-z0-9_]{2,23}$/.test(loginName.trim().toLowerCase()))
+          throw new ProductHttpError(
+            400,
+            "帳號須為 3 到 24 個英數字或底線，且以英數字開頭",
+          );
+        const passwordLength = Array.from(password).length;
+        if (
+          passwordLength < 10 ||
+          passwordLength > 128 ||
+          Buffer.byteLength(password, "utf8") > 512
+        )
+          throw new ProductHttpError(400, "密碼長度須為 10 到 128 個字元");
+        const user = await dependencies.identity.upgradeAccount(
+          authenticated.user.id,
+          loginName,
+          password,
+        );
+        sendJson(response, 200, { user: publicUser({ user }) });
+        return true;
+      }
+
+      if (url.pathname === "/api/login" && request.method === "POST") {
+        requireSameOrigin(request);
+        const body = await readRecord(request);
+        const loginName = optionalString(body.loginName, "帳號") ?? "";
+        const password = optionalString(body.password, "密碼") ?? "";
+        const previousToken = sessionTokenFromCookie(request.headers.cookie);
+        const previousIdentity = previousToken
+          ? await dependencies.identity.authenticate(previousToken)
+          : null;
+        const authenticated = await dependencies.identity.login(
+          loginName,
+          password,
+          request.socket.remoteAddress ?? "unknown",
+        );
+        if (
+          previousToken &&
+          previousIdentity &&
+          previousIdentity.user.id !== authenticated.user.id
+        )
+          await dependencies.identity.revoke(previousToken);
+        response.setHeader(
+          "Set-Cookie",
+          sessionCookie(authenticated.token, requestIsSecure(request)),
+        );
+        sendJson(response, 200, {
+          user: publicUser(authenticated),
+          expiresAt: authenticated.session.expiresAt,
+        });
+        return true;
+      }
+
       if (url.pathname === "/api/session" && request.method === "DELETE") {
         requireSameOrigin(request);
         const token = sessionTokenFromCookie(request.headers.cookie);
@@ -322,6 +425,40 @@ export const createProductHttpHandler =
           user: publicUser(authenticated),
           preferences,
         });
+        return true;
+      }
+
+      if (url.pathname === "/api/me/profile" && request.method === "GET") {
+        const authenticated = await requireIdentity(
+          request,
+          dependencies.identity,
+        );
+        const [preferences, stats, ratings] = await Promise.all([
+          dependencies.productStore.getUserPreferences(authenticated.user.id),
+          dependencies.productStore.getUserMatchStats(authenticated.user.id),
+          dependencies.productStore.getUserRatings(authenticated.user.id),
+        ]);
+        sendJson(response, 200, {
+          user: publicUser(authenticated),
+          preferences,
+          stats,
+          ratings: ratings.map(publicRating),
+        });
+        return true;
+      }
+
+      if (url.pathname === "/api/leaderboard" && request.method === "GET") {
+        const game = optionalGame(url.searchParams.get("game"));
+        if (!game) throw new ProductHttpError(400, "請指定排行榜棋種");
+        const limit = optionalInteger(
+          url.searchParams.get("limit"),
+          "排行榜筆數",
+        );
+        const entries = await dependencies.productStore.getLeaderboard(
+          game,
+          limit,
+        );
+        sendJson(response, 200, { game, entries });
         return true;
       }
 
@@ -348,6 +485,10 @@ export const createProductHttpHandler =
           body.showOnlineStatus,
           "線上狀態設定",
         );
+        const requestedLeaderboardVisibility = optionalBoolean(
+          body.showInLeaderboard,
+          "排行榜公開設定",
+        );
         const preferences: UpdateUserPreferencesInput = {
           ...(requestedLocale === undefined ? {} : { locale: requestedLocale }),
           ...(body.theme === undefined
@@ -365,6 +506,9 @@ export const createProductHttpHandler =
           ...(requestedOnlineStatus === undefined
             ? {}
             : { showOnlineStatus: requestedOnlineStatus }),
+          ...(requestedLeaderboardVisibility === undefined
+            ? {}
+            : { showInLeaderboard: requestedLeaderboardVisibility }),
         };
         const preferenceKeys = Object.keys(preferences).length;
         if (profileKeys === 0 && preferenceKeys === 0)
@@ -387,6 +531,223 @@ export const createProductHttpHandler =
           user: publicUser({ user }),
           preferences: updatedPreferences,
         });
+        return true;
+      }
+
+      if (url.pathname === "/api/me/friends" && request.method === "GET") {
+        const authenticated = await requireIdentity(
+          request,
+          dependencies.identity,
+        );
+        sendJson(
+          response,
+          200,
+          await dependencies.productStore.getSocialOverview(
+            authenticated.user.id,
+          ),
+        );
+        return true;
+      }
+
+      if (url.pathname === "/api/me/room-invites" && request.method === "GET") {
+        const authenticated = await requireIdentity(
+          request,
+          dependencies.identity,
+        );
+        sendJson(
+          response,
+          200,
+          await dependencies.productStore.listRoomInvitations(
+            authenticated.user.id,
+          ),
+        );
+        return true;
+      }
+
+      if (
+        url.pathname === "/api/me/room-invites" &&
+        request.method === "POST"
+      ) {
+        requireSameOrigin(request);
+        const authenticated = await requireIdentity(
+          request,
+          dependencies.identity,
+        );
+        const body = await readRecord(request);
+        const roomCode = optionalString(body.roomCode, "房間代碼")
+          ?.trim()
+          .toUpperCase();
+        if (!roomCode || !/^[A-Z0-9]{6}$/.test(roomCode))
+          throw new ProductHttpError(400, "房間代碼格式錯誤");
+        const recipientId = requiredUuid(
+          optionalString(body.friendUserId, "好友身份"),
+          "好友身份",
+        );
+        const invitation = await dependencies.createRoomInvitation(
+          roomCode,
+          authenticated.user.id,
+          recipientId,
+        );
+        sendJson(response, 201, invitation);
+        return true;
+      }
+
+      const roomInviteAction = url.pathname.match(
+        /^\/api\/me\/room-invites\/([^/]+)\/(accept|reject)$/,
+      );
+      if (roomInviteAction && request.method === "POST") {
+        requireSameOrigin(request);
+        const authenticated = await requireIdentity(
+          request,
+          dependencies.identity,
+        );
+        const invitationId = requiredUuid(roomInviteAction[1], "房間邀請");
+        if (roomInviteAction[2] === "accept") {
+          const invitation =
+            await dependencies.productStore.acceptRoomInvitation(
+              authenticated.user.id,
+              invitationId,
+            );
+          sendJson(response, 200, invitation);
+        } else {
+          await dependencies.productStore.rejectRoomInvitation(
+            authenticated.user.id,
+            invitationId,
+          );
+          sendNoContent(response);
+        }
+        return true;
+      }
+
+      if (
+        url.pathname === "/api/me/friends/requests" &&
+        request.method === "POST"
+      ) {
+        requireSameOrigin(request);
+        const authenticated = await requireIdentity(
+          request,
+          dependencies.identity,
+        );
+        const body = await readRecord(request);
+        const friendCode = requiredFriendCode(
+          optionalString(body.friendCode, "好友代碼"),
+        );
+        await dependencies.productStore.sendFriendRequest(
+          authenticated.user.id,
+          friendCode,
+        );
+        sendJson(
+          response,
+          201,
+          await dependencies.productStore.getSocialOverview(
+            authenticated.user.id,
+          ),
+        );
+        return true;
+      }
+
+      const friendRequestAction = url.pathname.match(
+        /^\/api\/me\/friends\/requests\/([^/]+)\/(accept|reject)$/,
+      );
+      if (friendRequestAction && request.method === "POST") {
+        requireSameOrigin(request);
+        const authenticated = await requireIdentity(
+          request,
+          dependencies.identity,
+        );
+        const requestId = requiredUuid(friendRequestAction[1], "好友邀請");
+        const action = friendRequestAction[2];
+        if (action !== "accept" && action !== "reject")
+          throw new ProductHttpError(404, "找不到 API");
+        await dependencies.productStore.respondToFriendRequest(
+          authenticated.user.id,
+          requestId,
+          action,
+        );
+        sendJson(
+          response,
+          200,
+          await dependencies.productStore.getSocialOverview(
+            authenticated.user.id,
+          ),
+        );
+        return true;
+      }
+
+      const friendRequest = url.pathname.match(
+        /^\/api\/me\/friends\/requests\/([^/]+)$/,
+      );
+      if (friendRequest && request.method === "DELETE") {
+        requireSameOrigin(request);
+        const authenticated = await requireIdentity(
+          request,
+          dependencies.identity,
+        );
+        await dependencies.productStore.cancelFriendRequest(
+          authenticated.user.id,
+          requiredUuid(friendRequest[1], "好友邀請"),
+        );
+        sendJson(
+          response,
+          200,
+          await dependencies.productStore.getSocialOverview(
+            authenticated.user.id,
+          ),
+        );
+        return true;
+      }
+
+      const friendBlock = url.pathname.match(
+        /^\/api\/me\/friends\/blocks\/([^/]+)$/,
+      );
+      if (
+        friendBlock &&
+        (request.method === "POST" || request.method === "DELETE")
+      ) {
+        requireSameOrigin(request);
+        const authenticated = await requireIdentity(
+          request,
+          dependencies.identity,
+        );
+        const blockedUserId = requiredUuid(friendBlock[1], "玩家代碼");
+        if (request.method === "POST")
+          await dependencies.productStore.blockUser(
+            authenticated.user.id,
+            blockedUserId,
+          );
+        else
+          await dependencies.productStore.unblockUser(
+            authenticated.user.id,
+            blockedUserId,
+          );
+        sendJson(
+          response,
+          200,
+          await dependencies.productStore.getSocialOverview(
+            authenticated.user.id,
+          ),
+        );
+        return true;
+      }
+
+      const friend = url.pathname.match(/^\/api\/me\/friends\/([^/]+)$/);
+      if (friend && request.method === "DELETE") {
+        requireSameOrigin(request);
+        const authenticated = await requireIdentity(
+          request,
+          dependencies.identity,
+        );
+        await dependencies.productStore.removeFriend(
+          authenticated.user.id,
+          requiredUuid(friend[1], "好友"),
+        );
+        sendJson(
+          response,
+          200,
+          await dependencies.productStore.getSocialOverview(
+            authenticated.user.id,
+          ),
+        );
         return true;
       }
 
@@ -480,6 +841,8 @@ export const createProductHttpHandler =
       return true;
     } catch (error: unknown) {
       const result = apiError(error);
+      if (error instanceof LoginRateLimitError)
+        response.setHeader("Retry-After", String(error.retryAfterSeconds));
       sendJson(response, result.status, { error: result.message });
       return true;
     }

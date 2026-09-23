@@ -24,6 +24,8 @@
           <span>▦</span> 遊戲大廳 <i>08</i></button
         ><button class="nav-item" id="nav-friends">
           <span>♧</span> 好友對戰 <span class="small-dot"></span></button
+        ><button class="nav-item" id="nav-profile">
+          <span>◉</span> 個人資料與排行榜</button
         ><button class="nav-item" id="nav-rules">
           <span>▤</span> 遊戲指南
         </button>
@@ -35,9 +37,12 @@
         <div class="note-line"></div>
         <small>THINK · PLAY · CONNECT</small>
       </div>
-      <div class="profile">
+      <div class="profile" id="nav-profile-card">
         <div class="avatar">訪</div>
-        <div>訪客棋手<small>不必註冊，即刻開局</small></div>
+        <div>
+          <span class="profile-name">訪客棋手</span>
+          <small id="profile-account-status">不必註冊，即刻開局</small>
+        </div>
         <span class="profile-dot"></span>
       </div>
     </aside>
@@ -318,6 +323,174 @@
         </button>
         <p class="setup-note">朋友需連到同一台伺服器；跨網路遊玩需先部署。</p>
       </form>
+    </dialog>
+    <dialog id="friends-dialog">
+      <button type="button" class="close-dialog" aria-label="關閉">×</button>
+      <div class="eyebrow dark">PLAY TOGETHER</div>
+      <h2>好友對戰</h2>
+      <p class="dialog-subtitle">
+        分享玩家代碼互加好友；好友上線狀態可在個人資料中控制。
+      </p>
+      <section class="friend-code-card" aria-labelledby="friend-code-title">
+        <label id="friend-code-title" for="friend-player-code"
+          >我的玩家代碼</label
+        >
+        <div class="friend-code-row">
+          <input id="friend-player-code" readonly aria-label="我的玩家代碼" />
+          <button type="button" class="button outline" id="copy-friend-code">
+            複製
+          </button>
+        </div>
+      </section>
+      <form id="friend-request-form">
+        <label for="friend-code-input">用朋友的代碼新增好友</label>
+        <div class="friend-request-row">
+          <input
+            id="friend-code-input"
+            maxlength="36"
+            placeholder="例如 QJ-1A2B3C4D5E"
+            autocomplete="off"
+            required
+          />
+          <button class="button primary" type="submit">送出邀請</button>
+        </div>
+      </form>
+      <section class="friend-section" aria-labelledby="friend-list-title">
+        <h3 id="friend-list-title">我的好友</h3>
+        <ul id="friends-list" class="friend-list"></ul>
+      </section>
+      <section class="friend-section" aria-labelledby="room-invites-title">
+        <h3 id="room-invites-title">房間邀請</h3>
+        <ul id="room-invites-list" class="friend-list"></ul>
+      </section>
+      <section class="friend-section" aria-labelledby="incoming-friends-title">
+        <h3 id="incoming-friends-title">收到的邀請</h3>
+        <ul id="friend-requests-incoming" class="friend-list"></ul>
+      </section>
+      <section class="friend-section" aria-labelledby="outgoing-friends-title">
+        <h3 id="outgoing-friends-title">送出的邀請</h3>
+        <ul id="friend-requests-outgoing" class="friend-list"></ul>
+      </section>
+      <details class="friend-section">
+        <summary>已封鎖的玩家</summary>
+        <ul id="blocked-friends-list" class="friend-list"></ul>
+      </details>
+    </dialog>
+    <dialog id="profile-dialog">
+      <button type="button" class="close-dialog" aria-label="關閉">×</button>
+      <div class="eyebrow dark">YOUR QIJU PROFILE</div>
+      <h2>個人資料與排行榜</h2>
+      <p class="dialog-subtitle" id="profile-identity"></p>
+      <section class="friend-code-card profile-code-card">
+        <label for="profile-player-code">玩家代碼</label>
+        <div class="friend-code-row">
+          <input id="profile-player-code" readonly aria-label="我的玩家代碼" />
+          <button type="button" class="button outline" id="copy-profile-code">
+            複製
+          </button>
+        </div>
+      </section>
+      <form id="profile-form" class="profile-form">
+        <label for="profile-display-name">顯示名稱</label>
+        <div class="friend-request-row">
+          <input id="profile-display-name" maxlength="20" required />
+          <button class="button primary" type="submit">儲存</button>
+        </div>
+      </form>
+      <section class="friend-section">
+        <h3>跨裝置帳號</h3>
+        <p id="account-state-copy" class="profile-hint"></p>
+        <form id="account-upgrade-form" class="profile-form">
+          <label for="account-upgrade-name">登入帳號</label>
+          <input
+            id="account-upgrade-name"
+            minlength="3"
+            maxlength="24"
+            pattern="[A-Za-z0-9][A-Za-z0-9_]{2,23}"
+            autocomplete="username"
+            required
+          />
+          <label for="account-upgrade-password">密碼（10 至 128 個字元）</label>
+          <input
+            id="account-upgrade-password"
+            type="password"
+            minlength="10"
+            maxlength="128"
+            autocomplete="new-password"
+            required
+          />
+          <button class="button primary" type="submit">綁定此訪客身份</button>
+        </form>
+        <button
+          id="show-login-form"
+          class="button small outline profile-switch"
+          type="button"
+        >
+          已有帳號？切換登入
+        </button>
+        <form id="account-login-form" class="profile-form" hidden>
+          <label for="account-login-name">登入帳號</label>
+          <input
+            id="account-login-name"
+            minlength="3"
+            maxlength="24"
+            autocomplete="username"
+            required
+          />
+          <label for="account-login-password">密碼</label>
+          <input
+            id="account-login-password"
+            type="password"
+            maxlength="128"
+            autocomplete="current-password"
+            required
+          />
+          <button class="button primary" type="submit">登入此裝置</button>
+        </form>
+        <button
+          id="show-upgrade-form"
+          class="button small outline profile-switch"
+          type="button"
+          hidden
+        >
+          回到訪客升級
+        </button>
+        <button
+          id="account-logout"
+          class="button small outline profile-switch"
+          type="button"
+          hidden
+        >
+          登出此裝置
+        </button>
+      </section>
+      <section class="friend-section">
+        <h3>對局戰績</h3>
+        <div id="profile-stats" class="profile-stats"></div>
+        <ul id="profile-ratings" class="friend-list"></ul>
+      </section>
+      <form id="privacy-settings-form" class="friend-section profile-settings">
+        <h3>隱私設定</h3>
+        <label
+          ><input id="setting-friend-invites" type="checkbox" />
+          接受好友與房間邀請</label
+        >
+        <label
+          ><input id="setting-online-status" type="checkbox" />
+          讓好友查看我的上線狀態</label
+        >
+        <label
+          ><input id="setting-leaderboard" type="checkbox" />
+          同意在公開排行榜顯示名稱與評分</label
+        >
+        <button class="button outline" type="submit">儲存隱私設定</button>
+      </form>
+      <section class="friend-section">
+        <h3>公開排行榜</h3>
+        <label for="leaderboard-game">棋種</label>
+        <select id="leaderboard-game"></select>
+        <ol id="leaderboard-list" class="leaderboard-list"></ol>
+      </section>
     </dialog>
     <dialog id="rules-dialog">
       <button class="close-dialog" aria-label="關閉">×</button>

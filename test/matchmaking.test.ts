@@ -37,11 +37,19 @@ void test("matchmaking pairs compatible rated tickets and keeps incompatible one
     ticket({ userId: "user-b", displayName: "玩家乙", game: "chess" }),
   );
   assert.equal(incompatible.match, null);
+  queue.enqueue(
+    ticket({
+      userId: "user-d",
+      displayName: "玩家丁",
+      createdAt: first.ticket.createdAt,
+      rating: 1800,
+    }),
+  );
   const matched = queue.enqueue(
     ticket({ userId: "user-c", displayName: "玩家丙", rating: 1650 }),
   );
   assert.equal(matched.match?.userId, "user-a");
-  assert.equal(queue.size, 1);
+  assert.equal(queue.size, 2);
 });
 
 void test("casual matchmaking ignores rating but still separates mode and game", () => {

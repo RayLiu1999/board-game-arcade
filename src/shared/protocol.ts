@@ -68,6 +68,8 @@ export interface JoinRoomMessage {
   readonly code: string;
   readonly name?: string;
   readonly token?: string;
+  readonly invitationId?: string;
+  readonly invitationToken?: string;
 }
 
 export interface MoveMessage {
@@ -225,14 +227,35 @@ export function parseClientMessage(value: unknown): ClientMessage {
     if (
       typeof value.code !== "string" ||
       !isOptionalString(value.name) ||
-      !isOptionalString(value.token)
+      !isOptionalString(value.token) ||
+      !isOptionalString(value.invitationId) ||
+      !isOptionalString(value.invitationToken)
     )
       throw new Error("加入房間訊息格式錯誤");
+    if (
+      (value.invitationId === undefined) !==
+        (value.invitationToken === undefined) ||
+      (value.invitationId !== undefined &&
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          value.invitationId,
+        )) ||
+      (value.invitationToken !== undefined &&
+        !/^[A-Za-z0-9_-]{43}$/.test(value.invitationToken))
+    )
+      throw new Error("房間邀請憑證格式錯誤");
+    if (value.invitationId !== undefined && value.token !== undefined)
+      throw new Error("房間邀請不可與舊座位 token 同時使用");
     return {
       type: "join",
       code: value.code,
       ...(value.name === undefined ? {} : { name: value.name }),
       ...(value.token === undefined ? {} : { token: value.token }),
+      ...(value.invitationId === undefined
+        ? {}
+        : { invitationId: value.invitationId }),
+      ...(value.invitationToken === undefined
+        ? {}
+        : { invitationToken: value.invitationToken }),
     };
   }
 

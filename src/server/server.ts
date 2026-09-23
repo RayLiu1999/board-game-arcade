@@ -52,6 +52,12 @@ export function createServer(options: ServerOptions = {}): ServerBundle {
       productStore: roomManager.productStore,
       claimRoom: (code, roomToken, userId) =>
         roomManager.claimPlayerIdentity(code, roomToken, userId),
+      createRoomInvitation: (roomCode, inviterId, recipientId) =>
+        roomManager.createFriendRoomInvitation(
+          roomCode,
+          inviterId,
+          recipientId,
+        ),
     }),
   });
   const wss = attachWebSocketServer(server, roomManager, identity);

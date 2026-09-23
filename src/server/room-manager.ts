@@ -36,6 +36,7 @@ import {
   type AppendMatchEventInput,
   type MatchOutcome,
   type ProductStore,
+  type RoomInvitationPreview,
 } from "./product-store.js";
 import { MatchmakingQueue, type MatchmakingTicket } from "./matchmaking.js";
 
@@ -227,6 +228,37 @@ export class RoomManager {
     });
   }
 
+  async createFriendRoomInvitation(
+    roomCode: string,
+    inviterId: string,
+    recipientId: string,
+  ): Promise<RoomInvitationPreview> {
+    await this.ready;
+    return this.runExclusive(roomCode.toUpperCase(), async () => {
+      const room = this.rooms.get(roomCode.toUpperCase());
+      if (!room) throw new Error("找不到房間，請確認房間代碼");
+      if (room.mode !== "friend")
+        throw new Error("只能從好友私人房間發出房間邀請");
+      if (!room.players.some((player) => player?.userId === inviterId))
+        throw new Error("只有房間中的玩家可以邀請好友");
+      if (room.players.some((player) => player?.userId === recipientId))
+        throw new Error("這位好友已在房間中");
+      if (room.players.every((player) => player !== null))
+        throw new Error("房間座位已滿");
+      if (room.state.winner !== null)
+        throw new Error("對局結束後不能再邀請玩家加入");
+      return this.productStore.createRoomInvitation(
+        {
+          roomCode: room.code,
+          game: room.state.game,
+          inviterId,
+          recipientId,
+        },
+        this.now(),
+      );
+    });
+  }
+
   recordMatchEvent(
     room: Room,
     input: Omit<AppendMatchEventInput, "matchId" | "sequence">,
@@ -325,15 +357,21 @@ export class RoomManager {
             throw new Error("配對連線已中斷，請重新嘗試");
           if (this.matchmaking.size >= 500)
             throw new Error("公開配對目前已滿，請稍後再試");
-          const result = this.matchmaking.enqueue({
-            userId,
-            displayName: user.displayName,
-            game: message.game,
-            mode: message.mode,
-            timeControl: message.timeControl,
-            rating,
-            createdAt: this.now(),
-          });
+          const excludedUserIds = new Set(
+            await this.productStore.getBlockedUserIds(userId),
+          );
+          const result = this.matchmaking.enqueue(
+            {
+              userId,
+              displayName: user.displayName,
+              game: message.game,
+              mode: message.mode,
+              timeControl: message.timeControl,
+              rating,
+              createdAt: this.now(),
+            },
+            excludedUserIds,
+          );
           this.matchmakingSockets.set(result.ticket.id, socket);
           if (!result.match) {
             socket.matchmakingTicketId = result.ticket.id;
@@ -342,7 +380,7 @@ export class RoomManager {
           }
           const opponentSocket = this.matchmakingSockets.get(result.match.id);
           try {
-            await this.createMatchmadeRoom(result.ticket, result.match, socket);
+            await this.createMatchmadeRoom(result.match, result.ticket, socket);
           } catch (error) {
             for (const [ticket, playerSocket] of [
               [result.ticket, socket],
@@ -662,6 +700,10 @@ export class RoomManager {
     message: Extract<ClientMessage, { type: "create" | "join" }>,
   ): Promise<void> {
     if (socket.room) throw new Error("請先離開目前房間");
+    const invitationJoin =
+      message.type === "join" &&
+      message.invitationId !== undefined &&
+      message.invitationToken !== undefined;
     let room: Room;
     let index: number;
     if (message.type === "create") {
@@ -702,18 +744,56 @@ export class RoomManager {
       const joinedRoom = this.rooms.get(message.code.toUpperCase());
       if (!joinedRoom) throw new Error("找不到房間，請確認房間代碼");
       room = joinedRoom;
-      index = room.players.findIndex((player) =>
-        Boolean(
-          player?.tokenHash &&
-            message.token &&
-            matchesRoomToken(message.token, player.tokenHash),
-        ),
-      );
+      if (
+        (message.invitationId === undefined) !==
+        (message.invitationToken === undefined)
+      )
+        throw new Error("房間邀請憑證格式錯誤");
+      if (invitationJoin) {
+        if (!socket.userId) throw new Error("房間邀請需要玩家身份");
+        if (room.mode !== "friend")
+          throw new Error("房間邀請只適用於好友私人房間");
+        index = room.players.findIndex(
+          (player) => player?.userId === socket.userId,
+        );
+      } else {
+        index = room.players.findIndex((player) =>
+          Boolean(
+            player?.tokenHash &&
+              message.token &&
+              matchesRoomToken(message.token, player.tokenHash),
+          ),
+        );
+      }
       if (index < 0) index = room.players.findIndex((player) => !player);
       if (index < 0) throw new Error("房間已滿");
     }
 
     const existing = room.players[index];
+    if (
+      invitationJoin &&
+      existing?.userId !== undefined &&
+      existing.userId !== socket.userId
+    )
+      throw new Error("房間邀請不可佔用其他玩家的座位");
+    if (existing?.userId && socket.userId && existing.userId !== socket.userId)
+      throw new Error("此座位已綁定其他玩家身份，重連需要相同玩家身份");
+    if (
+      !existing &&
+      (room.mode === "friend" || room.mode === "rated") &&
+      socket.userId
+    ) {
+      for (const player of room.players) {
+        if (
+          player?.userId &&
+          (await this.productStore.areUsersBlocked(
+            socket.userId,
+            player.userId,
+          ))
+        )
+          throw new Error("你無法加入這位玩家建立的房間");
+      }
+    }
     if (room.mode === "rated" || room.mode === "public") {
       if (!socket.userId) throw new Error("公開對局需要玩家身份");
       if (existing?.userId && existing.userId !== socket.userId)
@@ -726,19 +806,28 @@ export class RoomManager {
       )
         throw new Error("競技房不能與自己對戰");
     }
+    if (invitationJoin && socket.userId)
+      await this.productStore.consumeRoomInvitation(
+        socket.userId,
+        message.invitationId,
+        room.code,
+        message.invitationToken,
+        this.now(),
+      );
     if (existing?.socket && existing.socket !== socket) {
       existing.socket.room = null;
       existing.socket.close(4001, "Session replaced");
     }
     const token =
-      message.type === "join" && message.token
+      !invitationJoin && message.type === "join" && message.token
         ? message.token
         : createRoomToken();
     const name = existing?.name ?? normalizeName(message.name, index);
     const userId = existing?.userId ?? (existing ? undefined : socket.userId);
     room.players[index] = {
       name,
-      tokenHash: existing?.tokenHash ?? hashRoomToken(token),
+      tokenHash:
+        invitationJoin || !existing ? hashRoomToken(token) : existing.tokenHash,
       ...(userId === undefined ? {} : { userId }),
       socket,
       ...(existing?.bot ? { bot: true } : {}),
@@ -834,12 +923,8 @@ export class RoomManager {
     second: MatchmakingTicket,
     requester: ClientSocket,
   ): Promise<void> {
-    const left =
-      first.createdAt < second.createdAt ||
-      (first.createdAt === second.createdAt && first.id <= second.id)
-        ? first
-        : second;
-    const right = left === first ? second : first;
+    const left = first;
+    const right = second;
     const leftSocket = this.matchmakingSockets.get(left.id) ?? requester;
     const rightSocket = this.matchmakingSockets.get(right.id) ?? requester;
     if (

@@ -5,7 +5,12 @@ import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 
 import { createSessionToken } from "../src/server/product-security.js";
+import { ProductIdentityService } from "../src/server/product-identity.js";
 import { PostgresProductStore } from "../src/server/postgres-product-store.js";
+import { PostgresRoomStore } from "../src/server/postgres-room-store.js";
+import { createGame } from "../src/shared/engine.js";
+import { ROOM_INVITATION_TTL_MS } from "../src/server/product-store.js";
+import { ROOM_TTL_MS, type RoomSnapshot } from "../src/server/room-store.js";
 
 const databaseUrl = process.env.QIJU_TEST_DATABASE_URL;
 
@@ -18,6 +23,7 @@ if (!databaseUrl) {
 } else {
   void test("PostgreSQL product foundation persists identity and matches", async (t) => {
     const store = new PostgresProductStore({ connectionString: databaseUrl });
+    const roomStore = new PostgresRoomStore({ connectionString: databaseUrl });
     const cleanup = new Pool({ connectionString: databaseUrl });
     const userId = randomUUID();
     const opponentId = randomUUID();
@@ -25,8 +31,11 @@ if (!databaseUrl) {
     const secondMatchId = randomUUID();
     const ratedMatchId = randomUUID();
     const token = createSessionToken();
+    const inviteRoomCode = "SOC123";
 
     t.after(async () => {
+      await roomStore.delete(inviteRoomCode).catch(() => {});
+      await roomStore.close();
       await store.close();
       await cleanup.query("DELETE FROM qiju_matches WHERE id = $1", [matchId]);
       await cleanup.query("DELETE FROM qiju_matches WHERE id = $1", [
@@ -41,6 +50,7 @@ if (!databaseUrl) {
     });
 
     await store.initialize();
+    await roomStore.initialize();
     const comments = await cleanup.query<{
       table_name: string;
       description: string | null;
@@ -59,15 +69,20 @@ if (!databaseUrl) {
       [
         [
           "qiju_audit_log",
+          "qiju_friend_requests",
+          "qiju_friendships",
           "qiju_match_events",
           "qiju_match_participants",
           "qiju_matches",
           "qiju_rating_results",
           "qiju_ratings",
+          "qiju_room_invites",
           "qiju_room_players",
           "qiju_rooms",
           "qiju_sessions",
+          "qiju_user_blocks",
           "qiju_user_preferences",
+          "qiju_user_presence",
           "qiju_users",
         ],
       ],
@@ -76,6 +91,16 @@ if (!databaseUrl) {
       {
         table_name: "qiju_audit_log",
         description: "棋聚產品操作稽核紀錄。",
+      },
+      {
+        table_name: "qiju_friend_requests",
+        description:
+          "棋聚玩家之間的好友邀請與處理狀態；一列代表一筆單向邀請及其終態。",
+      },
+      {
+        table_name: "qiju_friendships",
+        description:
+          "棋聚已接受的雙向好友關係；一列代表依 UUID 排序保存的一對好友。",
       },
       {
         table_name: "qiju_match_events",
@@ -100,6 +125,11 @@ if (!databaseUrl) {
           "棋聚玩家依棋種保存的目前 rated 評分與戰績摘要；一列代表一名玩家在一個棋種的評分。",
       },
       {
+        table_name: "qiju_room_invites",
+        description:
+          "好友加入指定私人房間的短期授權；每列代表一位邀請對象的一次邀請。",
+      },
+      {
         table_name: "qiju_room_players",
         description: "棋聚房間中的玩家座位、重連 token 雜湊與身份綁定。",
       },
@@ -112,8 +142,18 @@ if (!databaseUrl) {
         description: "棋聚玩家的登入／訪客 session，僅保存 token 雜湊。",
       },
       {
+        table_name: "qiju_user_blocks",
+        description:
+          "棋聚玩家封鎖關係；一列代表 blocker 不接受 blocked_user 的好友邀請。",
+      },
+      {
         table_name: "qiju_user_preferences",
         description: "棋聚玩家的個人偏好設定。",
+      },
+      {
+        table_name: "qiju_user_presence",
+        description:
+          "玩家即時連線租約；每列代表一條已驗證的 WebSocket 連線，過期即視為離線。",
       },
       {
         table_name: "qiju_users",
@@ -142,15 +182,20 @@ if (!databaseUrl) {
       [
         [
           "qiju_audit_log",
+          "qiju_friend_requests",
+          "qiju_friendships",
           "qiju_match_events",
           "qiju_match_participants",
           "qiju_matches",
           "qiju_rating_results",
           "qiju_ratings",
+          "qiju_room_invites",
           "qiju_room_players",
           "qiju_rooms",
           "qiju_sessions",
+          "qiju_user_blocks",
           "qiju_user_preferences",
+          "qiju_user_presence",
           "qiju_users",
         ],
       ],
@@ -166,6 +211,20 @@ if (!databaseUrl) {
       displayName: "資料庫對手",
       createdAt: 1_700_000_000_001,
     });
+    const identity = new ProductIdentityService(store, store);
+    const loginName = `test_${user.id.replaceAll("-", "").slice(0, 12)}`;
+    const upgradedUser = await identity.upgradeAccount(
+      user.id,
+      loginName,
+      "correct horse battery staple",
+    );
+    assert.equal(upgradedUser.id, user.id);
+    const recovered = await identity.login(
+      loginName,
+      "correct horse battery staple",
+      "127.0.0.1",
+    );
+    assert.equal(recovered.user.id, user.id);
     const session = await store.createSession({
       userId: user.id,
       token,
@@ -295,6 +354,119 @@ if (!databaseUrl) {
       completedAt: 1_700_000_000_202,
     });
     assert.equal((await store.getUserRating(user.id, "gomoku")).rating, 1520);
+
+    const now = Date.now();
+    const friendRequest = await store.sendFriendRequest(
+      user.id,
+      opponent.publicCode,
+      now,
+    );
+    await store.respondToFriendRequest(
+      opponent.id,
+      friendRequest.id,
+      "accept",
+      now,
+    );
+    await store.updateUserPreferences(
+      opponent.id,
+      { showOnlineStatus: true },
+      now,
+    );
+    const presenceId = randomUUID();
+    await store.touchPresence(presenceId, opponent.id, now, now + 60_000);
+    assert.equal(
+      (await store.getSocialOverview(user.id)).friends[0]?.online,
+      true,
+    );
+    await store.removePresence(presenceId);
+    assert.equal(
+      (await store.getSocialOverview(user.id)).friends[0]?.online,
+      false,
+    );
+
+    await store.updateUserPreferences(
+      user.id,
+      { showInLeaderboard: true },
+      now,
+    );
+    assert.equal(
+      (await store.getLeaderboard("gomoku")).some(
+        (entry) => entry.publicCode === user.publicCode,
+      ),
+      true,
+    );
+
+    const initialState = createGame("chess");
+    if (initialState.game === "riichi") throw new Error("測試收到日麻狀態");
+    const snapshot: RoomSnapshot = {
+      code: inviteRoomCode,
+      state: initialState,
+      players: [null, null],
+      rounds: 1,
+      rematch: [],
+      revision: 0,
+      touched: now,
+      expiresAt: now + ROOM_TTL_MS,
+    };
+    await roomStore.create(snapshot);
+    const invitation = await store.createRoomInvitation(
+      {
+        roomCode: inviteRoomCode,
+        game: "chess",
+        inviterId: user.id,
+        recipientId: opponent.id,
+      },
+      now,
+    );
+    const accepted = await store.acceptRoomInvitation(
+      opponent.id,
+      invitation.id,
+      now + 100,
+    );
+    await store.consumeRoomInvitation(
+      opponent.id,
+      invitation.id,
+      inviteRoomCode,
+      accepted.entryToken,
+      now + 200,
+    );
+    assert.deepEqual(
+      await store.listRoomInvitations(opponent.id, now + 200),
+      [],
+    );
+    const expiryTime = now + 1000;
+    const expiringInvitation = await store.createRoomInvitation(
+      {
+        roomCode: inviteRoomCode,
+        game: "chess",
+        inviterId: user.id,
+        recipientId: opponent.id,
+      },
+      expiryTime,
+    );
+    const replacementInvitation = await store.createRoomInvitation(
+      {
+        roomCode: inviteRoomCode,
+        game: "chess",
+        inviterId: user.id,
+        recipientId: opponent.id,
+      },
+      expiryTime + ROOM_INVITATION_TTL_MS + 1,
+    );
+    assert.notEqual(replacementInvitation.id, expiringInvitation.id);
+    await store.rejectRoomInvitation(
+      opponent.id,
+      replacementInvitation.id,
+      expiryTime + ROOM_INVITATION_TTL_MS + 2,
+    );
+    assert.deepEqual(
+      await store.listRoomInvitations(
+        opponent.id,
+        expiryTime + ROOM_INVITATION_TTL_MS + 2,
+      ),
+      [],
+    );
+
     assert.equal(await store.revokeSession(token, 1_700_000_000_007), true);
     assert.equal(await store.findActiveSession(token, 1_700_000_000_008), null);
   });

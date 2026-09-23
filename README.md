@@ -101,7 +101,8 @@ PostgreSQL migration 會在伺服器啟動時自動初始化。日麻 live sessi
 
 - **AI 對戰**：七款棋提供三段難度、可選先後手，AI 在 Web Worker 中執行。西洋棋／象棋／將棋／跳棋／黑白棋使用有搜尋預算的 minimax 與 alpha-beta 剪枝；五子棋使用連線攻防評分；圍棋使用提子、氣與鄰接評分。日麻採用 `@kobalab/majiang-ai` 的獨立日麻策略（固定棋力），你與三位 AI 同桌。不是 Stockfish、Pikafish 或 KataGo，沒有棋力等級保證。AI 圍棋由玩家標記死棋並確認，AI 自動接受此標記。
 - **同機模式**：棋類為兩位玩家輪流操作；日麻為四人交接裝置，切換座位前遮住手牌，點擊確認才顯示自己的牌，圍棋數子需先後按黑白雙方確認。
-- **線上好友**：建立六碼私人房間，朋友輸入代碼或開啟邀請連結。棋類支援雙人，日麻支援四人（可 AI 補位）。伺服器驗證合法操作，全部真人同意後可再戰；棋類可認輸，日麻離席會暫停，不提供連線悔棋。
+- **線上好友**：建立六碼私人房間，朋友輸入代碼或接受遊戲內房間邀請。棋類支援雙人，日麻支援四人（可 AI 補位）。伺服器驗證合法操作，全部真人同意後可再戰；棋類可認輸，日麻離席會暫停，不提供連線悔棋。
+- **好友名單**：在「好友對戰」可查看自己的 QJ 玩家代碼、送出／接受／拒絕／取消好友邀請、查看好友上線狀態、邀請好友加入私人房間、移除好友與封鎖玩家。上線狀態需玩家主動公開；封鎖會阻止好友邀請、加入彼此的私人／rated 房，以及互相公開配對。
 - **競技私人房**：七種兩人棋類可建立 rated 房間。伺服器在合法終局後以各棋種獨立的 ELO 分數結算；可透過 `/api/me/ratings` 查看自己的評分與戰績。
 - **公開配對**：七種兩人棋類可選 rated 或 casual，依棋種與模式尋找對手。rated 配對會參考雙方分數，並隨等待時間放寬範圍；目前只提供不限時對局。等待 ticket 兩分鐘後到期，也可主動取消。佇列保存在單一伺服器記憶體，重新啟動後需重新排隊。
 
@@ -121,7 +122,7 @@ PostgreSQL migration 會在伺服器啟動時自動初始化。日麻 live sessi
 
 有設定 `DATABASE_URL` 時，一般棋類房間與日麻 live session 都會保存於 PostgreSQL；伺服器重啟後，玩家需以原本的 room code 與座位 token 重新連線。所有真人皆離線後 30 分鐘清理。相同分頁重新整理或暫時斷線，會用 sessionStorage 的座位 token 重連；伺服器資料庫只保存 token hash，不要分享 token。主動按「返回大廳」離開會清除該分頁的重連資訊，已佔用的席位仍保留，需重新建立房間才能換人。
 
-目前使用自動建立的 guest 身份，尚未提供正式帳號登入、排行榜、觀戰或對局時鐘。七種棋為兩人棋；日麻為四人桌，可混合真人與 AI。
+玩家可先以 guest 身份遊玩，再綁定帳號與密碼，於其他裝置登入以恢復好友與戰績；目前沒有忘記密碼自助重設。QJ 玩家代碼只供好友搜尋，不能用來登入或重連房間。公開排行榜只列出同意公開資料的玩家。觀戰與對局時鐘尚未提供。七種棋為兩人棋；日麻為四人桌，可混合真人與 AI。
 
 ## 日式麻將
 
@@ -162,6 +163,7 @@ src/server/room-store-factory.ts 依環境選擇 PostgreSQL 或 memory store
 src/server/postgres-product-store.ts PostgreSQL identity、match、event 與 audit adapter
 src/server/product-store.ts       User／Session／Match／Audit abstraction 與 memory adapter
 src/server/product-identity.ts    guest identity、session authentication 與撤銷
+src/server/migrations/007-social-friends.sql 好友邀請、好友關係與封鎖資料表
 src/server/product-security.ts    session token 產生、hash 與 constant-time 比對
 src/server/postgres-migrations.ts 共用 PostgreSQL migration runner
 pnpm-lock.yaml              本機、CI 與線上 pnpm 安裝鎖檔

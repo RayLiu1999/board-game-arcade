@@ -94,6 +94,7 @@ void test("product HTTP supports guest profile, preferences, history, and stats"
       historyPublic: boolean;
       friendInvites: boolean;
       showOnlineStatus: boolean;
+      showInLeaderboard: boolean;
       updatedAt: number;
     };
   };
@@ -104,7 +105,8 @@ void test("product HTTP supports guest profile, preferences, history, and stats"
     soundEnabled: false,
     historyPublic: true,
     friendInvites: true,
-    showOnlineStatus: true,
+    showOnlineStatus: false,
+    showInLeaderboard: false,
     updatedAt: updatedPayload.preferences.updatedAt,
   });
 
@@ -253,4 +255,186 @@ void test("product HTTP supports guest profile, preferences, history, and stats"
     headers: { Cookie: cookie },
   });
   assert.equal(afterLogout.status, 401);
+});
+
+void test("account upgrade and login restore the existing guest player", async (t) => {
+  const bundle = createServer();
+  await bundle.ready;
+  bundle.server.listen(0, "127.0.0.1");
+  await once(bundle.server, "listening");
+  const base = `http://127.0.0.1:${String(portOf(bundle.server))}`;
+  t.after(async () => {
+    for (const socket of bundle.wss.clients) socket.terminate();
+    await closeServer(bundle.server);
+  });
+
+  const created = await fetch(`${base}/api/guest-session`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ displayName: "跨裝置玩家" }),
+  });
+  assert.equal(created.status, 201);
+  const firstCookie = created.headers.get("set-cookie")?.split(";", 1)[0];
+  assert.ok(firstCookie);
+  const guest = (await created.json()) as {
+    user: { id: string; publicCode: string };
+  };
+
+  const upgrade = await fetch(`${base}/api/account/upgrade`, {
+    method: "POST",
+    headers: {
+      Cookie: firstCookie,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      loginName: "Player_01",
+      password: "correct horse battery staple",
+    }),
+  });
+  assert.equal(upgrade.status, 200);
+  const upgraded = (await upgrade.json()) as {
+    user: Record<string, unknown>;
+  };
+  assert.equal(upgraded.user.id, guest.user.id);
+  assert.equal(upgraded.user.publicCode, guest.user.publicCode);
+  assert.equal(upgraded.user.loginName, "player_01");
+  assert.equal(upgraded.user.hasAccount, true);
+  assert.equal("passwordHash" in upgraded.user, false);
+
+  const login = await fetch(`${base}/api/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      loginName: "PLAYER_01",
+      password: "correct horse battery staple",
+    }),
+  });
+  assert.equal(login.status, 200);
+  const secondCookie = login.headers.get("set-cookie")?.split(";", 1)[0];
+  assert.ok(secondCookie);
+  const restored = await fetch(`${base}/api/me/profile`, {
+    headers: { Cookie: secondCookie },
+  });
+  assert.equal(restored.status, 200);
+  const profile = (await restored.json()) as {
+    user: {
+      id: string;
+      publicCode: string;
+      loginName: string;
+      hasAccount: boolean;
+      displayName: string;
+    };
+  };
+  assert.equal(profile.user.id, guest.user.id);
+  assert.equal(profile.user.publicCode, guest.user.publicCode);
+  assert.equal(profile.user.loginName, "player_01");
+  assert.equal(profile.user.hasAccount, true);
+  assert.equal(profile.user.displayName, "跨裝置玩家");
+});
+
+void test("friend room invitations authorize only the invited player to take a seat", async (t) => {
+  const bundle = createServer();
+  await bundle.ready;
+  bundle.server.listen(0, "127.0.0.1");
+  await once(bundle.server, "listening");
+  const base = `http://127.0.0.1:${String(portOf(bundle.server))}`;
+  t.after(async () => {
+    for (const socket of bundle.wss.clients) socket.terminate();
+    await closeServer(bundle.server);
+  });
+
+  const createGuest = async (displayName: string) => {
+    const response = await fetch(`${base}/api/guest-session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName }),
+    });
+    assert.equal(response.status, 201);
+    const cookie = response.headers.get("set-cookie")?.split(";", 1)[0];
+    assert.ok(cookie);
+    const payload = (await response.json()) as {
+      user: { id: string; publicCode: string };
+    };
+    return { cookie, user: payload.user };
+  };
+
+  const inviter = await createGuest("房主");
+  const recipient = await createGuest("好友");
+  const friendRequest = await bundle.productStore.sendFriendRequest(
+    inviter.user.id,
+    recipient.user.publicCode,
+  );
+  await bundle.productStore.respondToFriendRequest(
+    recipient.user.id,
+    friendRequest.id,
+    "accept",
+  );
+
+  const websocketUrl = base.replace("http:", "ws:");
+  const inviterSocket = new WebSocket(websocketUrl, {
+    headers: { Cookie: inviter.cookie },
+  });
+  await once(inviterSocket, "open");
+  const inviterInbox = socketInbox(inviterSocket);
+  inviterSocket.send(JSON.stringify({ type: "create", game: "chess" }));
+  const inviterJoined = await inviterInbox.next();
+  assert.equal(inviterJoined.type, "joined");
+  await inviterInbox.next();
+
+  const createdInvite = await fetch(`${base}/api/me/room-invites`, {
+    method: "POST",
+    headers: {
+      Cookie: inviter.cookie,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      roomCode: inviterJoined.code,
+      friendUserId: recipient.user.id,
+    }),
+  });
+  assert.equal(createdInvite.status, 201);
+  const invitation = (await createdInvite.json()) as {
+    id: string;
+    roomCode: string;
+  };
+
+  const accepted = await fetch(
+    `${base}/api/me/room-invites/${encodeURIComponent(invitation.id)}/accept`,
+    {
+      method: "POST",
+      headers: { Cookie: recipient.cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    },
+  );
+  assert.equal(accepted.status, 200);
+  const grant = (await accepted.json()) as {
+    entryToken: string;
+    roomCode: string;
+  };
+
+  const recipientSocket = new WebSocket(websocketUrl, {
+    headers: { Cookie: recipient.cookie },
+  });
+  await once(recipientSocket, "open");
+  const recipientInbox = socketInbox(recipientSocket);
+  recipientSocket.send(
+    JSON.stringify({
+      type: "join",
+      code: grant.roomCode,
+      invitationId: invitation.id,
+      invitationToken: grant.entryToken,
+    }),
+  );
+  const recipientJoined = await recipientInbox.next();
+  assert.equal(recipientJoined.type, "joined");
+  await recipientInbox.next();
+
+  const room = bundle.rooms.get(invitation.roomCode);
+  assert.ok(room);
+  assert.equal(
+    room.players.some((player) => player?.userId === recipient.user.id),
+    true,
+  );
+  inviterSocket.terminate();
+  recipientSocket.terminate();
 });

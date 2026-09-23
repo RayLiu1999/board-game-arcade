@@ -55,6 +55,7 @@ interface DomElement extends HTMLElement {
   maxLength: number;
   disabled: boolean;
   options: HTMLOptionsCollection;
+  select(): void;
   showModal(): void;
   close(): void;
 }
@@ -116,6 +117,106 @@ interface AiResponse {
   readonly id: number;
   readonly move?: GameMove | null;
   readonly error?: string;
+}
+
+interface SocialPerson {
+  readonly userId: string;
+  readonly displayName: string;
+}
+
+interface FriendEntry extends SocialPerson {
+  readonly since: number;
+  readonly online: boolean | null;
+}
+
+interface FriendRequestEntry extends SocialPerson {
+  readonly id: string;
+  readonly createdAt: number;
+}
+
+interface BlockedPerson extends SocialPerson {
+  readonly blockedAt: number;
+}
+
+interface FriendOverview {
+  readonly friendCode: string;
+  readonly friends: readonly FriendEntry[];
+  readonly incomingRequests: readonly FriendRequestEntry[];
+  readonly outgoingRequests: readonly FriendRequestEntry[];
+  readonly blockedUsers: readonly BlockedPerson[];
+}
+
+interface RoomInvitePreview {
+  readonly id: string;
+  readonly roomCode: string;
+  readonly game: GameId;
+  readonly inviterId: string;
+  readonly inviterName: string;
+  readonly status: "pending" | "accepted";
+  readonly createdAt: number;
+  readonly expiresAt: number;
+}
+
+interface AcceptedRoomInvite extends RoomInvitePreview {
+  readonly entryToken: string;
+}
+
+interface ProfileUser {
+  readonly id: string;
+  readonly publicCode: string;
+  readonly loginName: string | null;
+  readonly hasAccount: boolean;
+  readonly displayName: string;
+  readonly status: string;
+}
+
+interface ProfilePreferences {
+  readonly friendInvites: boolean;
+  readonly showOnlineStatus: boolean;
+  readonly showInLeaderboard: boolean;
+}
+
+interface ProfileStats {
+  readonly completed: number;
+  readonly wins: number;
+  readonly losses: number;
+  readonly draws: number;
+  readonly byGame: readonly {
+    readonly game: GameId;
+    readonly completed: number;
+    readonly wins: number;
+    readonly losses: number;
+    readonly draws: number;
+  }[];
+}
+
+interface ProfileRating {
+  readonly game: GameId;
+  readonly rating: number;
+  readonly gamesPlayed: number;
+  readonly wins: number;
+  readonly losses: number;
+  readonly draws: number;
+  readonly provisional: boolean;
+}
+
+interface ProfileData {
+  readonly user: ProfileUser;
+  readonly preferences: ProfilePreferences;
+  readonly stats: ProfileStats;
+  readonly ratings: readonly ProfileRating[];
+}
+
+interface LeaderboardEntry {
+  readonly rank: number;
+  readonly publicCode: string;
+  readonly displayName: string;
+  readonly rating: number;
+  readonly gamesPlayed: number;
+  readonly wins: number;
+  readonly losses: number;
+  readonly draws: number;
+  readonly provisional: boolean;
 }
 
 const $ = (selector: string): DomElement => {
@@ -205,6 +306,17 @@ let riichiWorker: Worker | null = null,
 let toastTimer: ReturnType<typeof setTimeout> | undefined,
   confirmCallback: (() => void) | null = null,
   networkBusy = false;
+let friendsRefreshTimer: ReturnType<typeof setInterval> | null = null,
+  roomInvitePollTimer: ReturnType<typeof setInterval> | null = null,
+  identityReconnectRequested = false,
+  pendingRoomInviteJoin = false,
+  roomInvitePollInFlight = false;
+const knownRoomInviteIds = new Set<string>();
+let pendingRoomInvite: {
+  readonly id: string;
+  readonly entryToken: string;
+  readonly roomCode: string;
+} | null = null;
 const store = {
   get(key: string): unknown {
     try {
@@ -439,7 +551,808 @@ function openJoin() {
   $("#join-dialog").showModal();
 }
 $("#header-join").onclick = openJoin;
-$("#nav-friends").onclick = openJoin;
+
+function showSocialEmpty(selector: string, message: string): void {
+  const row = document.createElement("li");
+  row.className = "friend-empty";
+  row.textContent = message;
+  $(selector).replaceChildren(row);
+}
+
+function addSocialRow(
+  selector: string,
+  displayName: string,
+  actions: readonly { readonly label: string; readonly run: () => void }[],
+  statusText?: string,
+  online = false,
+): void {
+  const row = document.createElement("li");
+  row.className = "friend-row";
+  const person = document.createElement("span");
+  person.className = "friend-row-person";
+  const name = document.createElement("span");
+  name.className = "friend-row-name";
+  name.textContent = displayName;
+  person.append(name);
+  if (statusText) {
+    const status = document.createElement("span");
+    status.className = `friend-status${online ? " online" : ""}`;
+    status.textContent = statusText;
+    person.append(status);
+  }
+  row.append(person);
+  const buttons = document.createElement("div");
+  buttons.className = "friend-row-actions";
+  for (const action of actions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "button small outline";
+    button.textContent = action.label;
+    button.onclick = action.run;
+    buttons.append(button);
+  }
+  row.append(buttons);
+  $(selector).append(row);
+}
+
+async function loadFriends(): Promise<void> {
+  await ensureProductSession("");
+  const [friendsResponse, invitesResponse] = await Promise.all([
+    fetch("/api/me/friends", { credentials: "same-origin" }),
+    fetch("/api/me/room-invites", { credentials: "same-origin" }),
+  ]);
+  const friendsPayload = (await friendsResponse.json().catch(() => null)) as
+    | FriendOverview
+    | { readonly error?: string }
+    | null;
+  if (!friendsResponse.ok)
+    throw new Error(
+      friendsPayload && "error" in friendsPayload
+        ? (friendsPayload.error ?? "無法載入好友")
+        : "無法載入好友",
+    );
+  const invitesPayload = (await invitesResponse.json().catch(() => null)) as
+    | readonly RoomInvitePreview[]
+    | { readonly error?: string }
+    | null;
+  if (!invitesResponse.ok)
+    throw new Error(
+      invitesPayload &&
+      !Array.isArray(invitesPayload) &&
+      "error" in invitesPayload
+        ? (invitesPayload.error ?? "無法載入房間邀請")
+        : "無法載入房間邀請",
+    );
+  if (!friendsPayload || !("friendCode" in friendsPayload))
+    throw new Error("好友資料格式錯誤");
+  if (!Array.isArray(invitesPayload)) throw new Error("房間邀請資料格式錯誤");
+  renderFriends(friendsPayload, invitesPayload);
+}
+
+async function mutateFriends(
+  path: string,
+  method: "POST" | "DELETE",
+  successMessage: string,
+): Promise<void> {
+  const response = await fetch(`/api/me/friends${path}`, {
+    method,
+    credentials: "same-origin",
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | { readonly error?: string }
+    | FriendOverview
+    | null;
+  if (!response.ok)
+    throw new Error(
+      payload && "error" in payload
+        ? (payload.error ?? "操作失敗")
+        : "操作失敗",
+    );
+  await loadFriends();
+  toast(successMessage);
+}
+
+function runFriendAction(
+  path: string,
+  method: "POST" | "DELETE",
+  successMessage: string,
+): () => void {
+  return () => {
+    void mutateFriends(path, method, successMessage).catch((error: unknown) => {
+      toast(errorMessage(error));
+    });
+  };
+}
+
+async function createRoomInvitation(friendUserId: string): Promise<void> {
+  const currentRoom = room;
+  if (!currentRoom || currentRoom.mode !== "friend")
+    throw new Error("請先建立好友私人房間");
+  const response = await fetch("/api/me/room-invites", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      roomCode: currentRoom.code,
+      friendUserId,
+    }),
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | RoomInvitePreview
+    | { readonly error?: string }
+    | null;
+  if (!response.ok)
+    throw new Error(
+      payload && "error" in payload
+        ? (payload.error ?? "無法送出房間邀請")
+        : "無法送出房間邀請",
+    );
+  await loadFriends();
+  toast("已送出房間邀請");
+}
+
+async function acceptRoomInvitation(invitationId: string): Promise<void> {
+  if (mode === "online" && room)
+    throw new Error("請先離開目前房間，再接受新的房間邀請");
+  await ensureProductSession("");
+  const response = await fetch(
+    `/api/me/room-invites/${encodeURIComponent(invitationId)}/accept`,
+    { method: "POST", credentials: "same-origin" },
+  );
+  const payload = (await response.json().catch(() => null)) as
+    | AcceptedRoomInvite
+    | { readonly error?: string }
+    | null;
+  if (!response.ok || !payload || !("entryToken" in payload))
+    throw new Error(
+      payload && "error" in payload
+        ? (payload.error ?? "無法接受房間邀請")
+        : "房間邀請資料格式錯誤",
+    );
+  await connect();
+  const ws = socket;
+  if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error("連線尚未建立");
+  pendingRoomInvite = {
+    id: payload.id,
+    entryToken: payload.entryToken,
+    roomCode: payload.roomCode,
+  };
+  pendingRoomInviteJoin = true;
+  room = {
+    code: payload.roomCode,
+    mode: "friend",
+    token: "",
+    side: 1,
+    chat: [],
+  };
+  mode = "online";
+  $("#friends-dialog").close();
+  ws.send(
+    JSON.stringify({
+      type: "join",
+      code: payload.roomCode,
+      name: $("#profile-display-name").value.trim() || "訪客棋手",
+      invitationId: payload.id,
+      invitationToken: payload.entryToken,
+    }),
+  );
+}
+
+async function rejectRoomInvitation(invitationId: string): Promise<void> {
+  const response = await fetch(
+    `/api/me/room-invites/${encodeURIComponent(invitationId)}/reject`,
+    { method: "POST", credentials: "same-origin" },
+  );
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as {
+      readonly error?: string;
+    } | null;
+    throw new Error(payload?.error ?? "無法拒絕房間邀請");
+  }
+  await loadFriends();
+  toast("已拒絕房間邀請");
+}
+
+function renderFriends(
+  data: FriendOverview,
+  roomInvites: readonly RoomInvitePreview[],
+): void {
+  $("#friend-player-code").value = data.friendCode;
+  if (data.friends.length === 0)
+    showSocialEmpty(
+      "#friends-list",
+      "還沒有好友，輸入朋友的玩家代碼開始邀請。",
+    );
+  else {
+    $("#friends-list").replaceChildren();
+    for (const friend of data.friends) {
+      const actions: { readonly label: string; readonly run: () => void }[] = [
+        ...(mode === "online" && room?.mode === "friend"
+          ? [
+              {
+                label: "邀請入房",
+                run: () => {
+                  void createRoomInvitation(friend.userId).catch(
+                    (error: unknown) => {
+                      toast(errorMessage(error));
+                    },
+                  );
+                },
+              },
+            ]
+          : []),
+        {
+          label: "移除",
+          run: runFriendAction(
+            `/${encodeURIComponent(friend.userId)}`,
+            "DELETE",
+            "已移除好友",
+          ),
+        },
+        {
+          label: "封鎖",
+          run: runFriendAction(
+            `/blocks/${encodeURIComponent(friend.userId)}`,
+            "POST",
+            "已封鎖玩家",
+          ),
+        },
+      ];
+      const presenceLabel =
+        friend.online === null
+          ? "上線狀態隱藏"
+          : friend.online
+            ? "線上"
+            : "離線";
+      addSocialRow(
+        "#friends-list",
+        friend.displayName,
+        actions,
+        presenceLabel,
+        friend.online === true,
+      );
+    }
+  }
+
+  if (roomInvites.length === 0)
+    showSocialEmpty("#room-invites-list", "目前沒有待處理的房間邀請。");
+  else {
+    $("#room-invites-list").replaceChildren();
+    for (const invite of roomInvites)
+      addSocialRow(
+        "#room-invites-list",
+        `${invite.inviterName} 邀請你加入${GAMES[invite.game].name}房間`,
+        [
+          {
+            label: invite.status === "accepted" ? "重新加入" : "加入房間",
+            run: () => {
+              if (mode === "online" && room) {
+                toast("請先離開目前房間，再接受新的房間邀請。");
+                return;
+              }
+              void acceptRoomInvitation(invite.id).catch((error: unknown) => {
+                toast(errorMessage(error));
+              });
+            },
+          },
+          {
+            label: "拒絕",
+            run: () => {
+              void rejectRoomInvitation(invite.id).catch((error: unknown) => {
+                toast(errorMessage(error));
+              });
+            },
+          },
+        ],
+        `房間代碼 ${invite.roomCode}`,
+      );
+  }
+
+  if (data.incomingRequests.length === 0)
+    showSocialEmpty("#friend-requests-incoming", "目前沒有收到好友邀請。");
+  else {
+    $("#friend-requests-incoming").replaceChildren();
+    for (const request of data.incomingRequests)
+      addSocialRow("#friend-requests-incoming", request.displayName, [
+        {
+          label: "接受",
+          run: runFriendAction(
+            `/requests/${encodeURIComponent(request.id)}/accept`,
+            "POST",
+            "已接受好友邀請",
+          ),
+        },
+        {
+          label: "拒絕",
+          run: runFriendAction(
+            `/requests/${encodeURIComponent(request.id)}/reject`,
+            "POST",
+            "已拒絕好友邀請",
+          ),
+        },
+        {
+          label: "封鎖",
+          run: runFriendAction(
+            `/blocks/${encodeURIComponent(request.userId)}`,
+            "POST",
+            "已封鎖玩家",
+          ),
+        },
+      ]);
+  }
+
+  if (data.outgoingRequests.length === 0)
+    showSocialEmpty("#friend-requests-outgoing", "目前沒有送出的好友邀請。");
+  else {
+    $("#friend-requests-outgoing").replaceChildren();
+    for (const request of data.outgoingRequests)
+      addSocialRow("#friend-requests-outgoing", request.displayName, [
+        {
+          label: "取消",
+          run: runFriendAction(
+            `/requests/${encodeURIComponent(request.id)}`,
+            "DELETE",
+            "已取消好友邀請",
+          ),
+        },
+        {
+          label: "封鎖",
+          run: runFriendAction(
+            `/blocks/${encodeURIComponent(request.userId)}`,
+            "POST",
+            "已封鎖玩家",
+          ),
+        },
+      ]);
+  }
+
+  if (data.blockedUsers.length === 0)
+    showSocialEmpty("#blocked-friends-list", "目前沒有封鎖玩家。");
+  else {
+    $("#blocked-friends-list").replaceChildren();
+    for (const blocked of data.blockedUsers)
+      addSocialRow("#blocked-friends-list", blocked.displayName, [
+        {
+          label: "解除封鎖",
+          run: runFriendAction(
+            `/blocks/${encodeURIComponent(blocked.userId)}`,
+            "DELETE",
+            "已解除封鎖",
+          ),
+        },
+      ]);
+  }
+}
+
+function openFriends(): void {
+  $("#friends-dialog").showModal();
+  if (friendsRefreshTimer !== null) clearInterval(friendsRefreshTimer);
+  void loadFriends().catch((error: unknown) => {
+    toast(errorMessage(error));
+  });
+  friendsRefreshTimer = setInterval(() => {
+    void loadFriends().catch(() => {});
+  }, 15_000);
+}
+
+$("#friends-dialog").addEventListener("close", () => {
+  if (friendsRefreshTimer !== null) clearInterval(friendsRefreshTimer);
+  friendsRefreshTimer = null;
+});
+
+async function pollRoomInvitations(): Promise<void> {
+  if (roomInvitePollInFlight) return;
+  roomInvitePollInFlight = true;
+  try {
+    const response = await fetch("/api/me/room-invites", {
+      credentials: "same-origin",
+    });
+    const payload = (await response.json().catch(() => null)) as
+      | readonly RoomInvitePreview[]
+      | null;
+    if (!response.ok || !Array.isArray(payload)) return;
+    const invites = payload as readonly RoomInvitePreview[];
+    const incoming = new Set(invites.map((invite) => invite.id));
+    for (const invite of invites) {
+      if (knownRoomInviteIds.has(invite.id)) continue;
+      knownRoomInviteIds.add(invite.id);
+      toast(`${invite.inviterName} 邀請你加入${GAMES[invite.game].name}房間`);
+    }
+    const dot = $("#nav-friends").querySelector(".small-dot");
+    if (dot) {
+      dot.textContent = incoming.size > 0 ? String(incoming.size) : "";
+      dot.classList.toggle("has-invites", incoming.size > 0);
+    }
+    if ($("#friends-dialog").hasAttribute("open"))
+      void loadFriends().catch(() => {});
+  } catch {
+    // Presence refresh is best-effort; a later poll will retry.
+  } finally {
+    roomInvitePollInFlight = false;
+  }
+}
+
+async function startRoomInvitePolling(): Promise<void> {
+  try {
+    await ensureProductSession("");
+    await pollRoomInvitations();
+    if (roomInvitePollTimer !== null) clearInterval(roomInvitePollTimer);
+    roomInvitePollTimer = setInterval(() => {
+      void pollRoomInvitations();
+    }, 15_000);
+  } catch {
+    // 玩家開始使用社交功能時仍會再建立 session 並載入邀請。
+  }
+}
+
+void startRoomInvitePolling();
+
+$("#nav-friends").onclick = openFriends;
+$("#copy-friend-code").onclick = () => {
+  const code = $("#friend-player-code").value;
+  if (!code) return;
+  const clipboard = navigator.clipboard as Clipboard | undefined;
+  if (!clipboard) {
+    $("#friend-player-code").select();
+    toast("已選取玩家代碼，請複製分享給朋友。");
+    return;
+  }
+  void clipboard
+    .writeText(code)
+    .then(() => {
+      toast("已複製玩家代碼");
+    })
+    .catch(() => {
+      $("#friend-player-code").select();
+      toast("已選取玩家代碼，請複製分享給朋友。");
+    });
+};
+
+$("#friend-request-form").onsubmit = async (event) => {
+  event.preventDefault();
+  const friendCode = $("#friend-code-input").value.trim();
+  try {
+    const response = await fetch("/api/me/friends/requests", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ friendCode }),
+    });
+    const payload = (await response.json().catch(() => null)) as
+      | { readonly error?: string }
+      | FriendOverview
+      | null;
+    if (!response.ok)
+      throw new Error(
+        payload && "error" in payload
+          ? (payload.error ?? "無法送出好友邀請")
+          : "無法送出好友邀請",
+      );
+    $("#friend-code-input").value = "";
+    await loadFriends();
+    toast("已送出好友邀請");
+  } catch (error: unknown) {
+    toast(errorMessage(error));
+  }
+};
+
+function renderProfile(profile: ProfileData): void {
+  const user = profile.user;
+  $("#profile-player-code").value = user.publicCode;
+  $("#profile-display-name").value = user.displayName;
+  $("#profile-identity").textContent = user.hasAccount
+    ? `已綁定帳號 @${user.loginName ?? ""} · 玩家身份 ${user.publicCode}`
+    : `訪客身份 · 綁定帳號後可跨裝置找回資料 · ${user.publicCode}`;
+  $("#account-state-copy").textContent = user.hasAccount
+    ? `此身份已綁定 @${user.loginName ?? ""}，好友與對局資料會留在同一玩家身份。請妥善保管密碼，目前尚無忘記密碼重設功能。`
+    : "綁定後可在其他裝置登入；這會保留目前好友、戰績與評分。登入既有帳號會切換到該帳號資料，不會合併目前訪客資料。請妥善保管密碼，目前尚無忘記密碼重設功能。";
+  $("#account-upgrade-form").hidden = user.hasAccount;
+  $("#show-login-form").hidden = user.hasAccount;
+  $("#account-login-form").hidden = true;
+  $("#show-upgrade-form").hidden = true;
+  $("#account-logout").hidden = !user.hasAccount;
+  (
+    document.querySelector("#setting-friend-invites") as HTMLInputElement
+  ).checked = profile.preferences.friendInvites;
+  (
+    document.querySelector("#setting-online-status") as HTMLInputElement
+  ).checked = profile.preferences.showOnlineStatus;
+  (document.querySelector("#setting-leaderboard") as HTMLInputElement).checked =
+    profile.preferences.showInLeaderboard;
+
+  const stats = $("#profile-stats");
+  stats.replaceChildren();
+  for (const [label, value] of [
+    ["完成對局", profile.stats.completed],
+    ["勝場", profile.stats.wins],
+    ["敗場", profile.stats.losses],
+    ["和局", profile.stats.draws],
+  ] as const) {
+    const card = document.createElement("div");
+    card.className = "profile-stat";
+    const number = document.createElement("strong");
+    number.textContent = String(value);
+    const caption = document.createElement("span");
+    caption.textContent = label;
+    card.append(number, caption);
+    stats.append(card);
+  }
+
+  if (profile.stats.byGame.length === 0)
+    showSocialEmpty(
+      "#profile-ratings",
+      "完成 rated 對局後會在這裡顯示分棋種戰績。",
+    );
+  else {
+    $("#profile-ratings").replaceChildren();
+    for (const gameStats of profile.stats.byGame)
+      addSocialRow(
+        "#profile-ratings",
+        `${GAMES[gameStats.game].name} · ${String(gameStats.completed)} 局`,
+        [],
+        `勝 ${String(gameStats.wins)} · 敗 ${String(gameStats.losses)} · 和 ${String(gameStats.draws)}`,
+      );
+  }
+  for (const rating of profile.ratings)
+    addSocialRow(
+      "#profile-ratings",
+      `${GAMES[rating.game].name} ELO ${String(rating.rating)}`,
+      [],
+      `${String(rating.gamesPlayed)} 局 · ${rating.provisional ? "暫定評分" : "正式評分"}`,
+    );
+
+  const gameSelect =
+    document.querySelector<HTMLSelectElement>("#leaderboard-game");
+  if (!gameSelect) throw new Error("找不到排行榜棋種選單");
+  if (gameSelect.options.length === 0) {
+    for (const game of GAME_IDS) {
+      const option = document.createElement("option");
+      option.value = game;
+      option.textContent = GAMES[game].name;
+      gameSelect.append(option);
+    }
+    gameSelect.addEventListener("change", () => {
+      void loadLeaderboard(gameSelect.value);
+    });
+  }
+  if (!GAME_IDS.includes(gameSelect.value as GameId))
+    gameSelect.value = "shogi";
+  void loadLeaderboard(gameSelect.value);
+
+  const profileCard = $("#nav-profile-card");
+  const avatar = profileCard.querySelector(".avatar");
+  const summary = profileCard.querySelector(".profile-name");
+  const accountStatus = $("#profile-account-status");
+  if (avatar) avatar.textContent = Array.from(user.displayName)[0] ?? "棋";
+  if (summary) summary.textContent = user.displayName;
+  accountStatus.textContent = user.hasAccount
+    ? `已綁定 @${user.loginName ?? ""}`
+    : "訪客棋手 · 尚未綁定";
+}
+
+async function loadProfile(): Promise<void> {
+  await ensureProductSession("");
+  const response = await fetch("/api/me/profile", {
+    credentials: "same-origin",
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | ProfileData
+    | { readonly error?: string }
+    | null;
+  if (!response.ok || !payload || !("user" in payload))
+    throw new Error(
+      payload && "error" in payload
+        ? (payload.error ?? "無法載入個人資料")
+        : "個人資料格式錯誤",
+    );
+  renderProfile(payload);
+}
+
+async function loadLeaderboard(game: string): Promise<void> {
+  if (!GAME_IDS.includes(game as GameId)) return;
+  const response = await fetch(
+    `/api/leaderboard?game=${encodeURIComponent(game)}&limit=50`,
+    { credentials: "same-origin" },
+  );
+  const payload = (await response.json().catch(() => null)) as
+    | { readonly entries: readonly LeaderboardEntry[] }
+    | { readonly error?: string }
+    | null;
+  const list = $("#leaderboard-list");
+  if (!response.ok || !payload || !("entries" in payload)) {
+    const message =
+      payload && "error" in payload
+        ? (payload.error ?? "無法載入排行榜")
+        : "排行榜資料格式錯誤";
+    showSocialEmpty("#leaderboard-list", message);
+    return;
+  }
+  if (payload.entries.length === 0) {
+    showSocialEmpty(
+      "#leaderboard-list",
+      "目前沒有公開評分；玩家可在隱私設定中同意顯示排行榜資料。",
+    );
+    return;
+  }
+  list.replaceChildren();
+  for (const entry of payload.entries) {
+    const row = document.createElement("li");
+    const name = document.createElement("span");
+    name.textContent = `${entry.displayName} · ${entry.publicCode}`;
+    const rating = document.createElement("span");
+    rating.className = "leaderboard-rating";
+    rating.textContent = `${String(entry.rating)}${entry.provisional ? " · 暫定" : ""}`;
+    row.value = entry.rank;
+    row.append(name, rating);
+    list.append(row);
+  }
+}
+
+function openProfile(): void {
+  $("#profile-dialog").showModal();
+  void loadProfile().catch((error: unknown) => {
+    toast(errorMessage(error));
+  });
+}
+
+$("#nav-profile").onclick = openProfile;
+$("#profile-form").onsubmit = async (event) => {
+  event.preventDefault();
+  try {
+    const response = await fetch("/api/me", {
+      method: "PATCH",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: $("#profile-display-name").value }),
+    });
+    const payload = (await response.json().catch(() => null)) as {
+      readonly error?: string;
+    } | null;
+    if (!response.ok) throw new Error(payload?.error ?? "無法儲存顯示名稱");
+    await loadProfile();
+    toast("已更新顯示名稱");
+  } catch (error: unknown) {
+    toast(errorMessage(error));
+  }
+};
+
+$("#account-upgrade-form").onsubmit = async (event) => {
+  event.preventDefault();
+  const password = $("#account-upgrade-password").value;
+  try {
+    const response = await fetch("/api/account/upgrade", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        loginName: $("#account-upgrade-name").value,
+        password,
+      }),
+    });
+    const payload = (await response.json().catch(() => null)) as {
+      readonly error?: string;
+    } | null;
+    if (!response.ok) throw new Error(payload?.error ?? "無法綁定帳號");
+    $("#account-upgrade-password").value = "";
+    await loadProfile();
+    toast("已綁定帳號；原有好友與戰績已保留");
+  } catch (error: unknown) {
+    toast(errorMessage(error));
+  }
+};
+
+$("#show-login-form").onclick = () => {
+  $("#account-upgrade-form").hidden = true;
+  $("#show-login-form").hidden = true;
+  $("#account-login-form").hidden = false;
+  $("#show-upgrade-form").hidden = false;
+};
+$("#show-upgrade-form").onclick = () => {
+  $("#account-login-form").hidden = true;
+  $("#show-upgrade-form").hidden = true;
+  $("#account-upgrade-form").hidden = false;
+  $("#show-login-form").hidden = false;
+};
+
+$("#account-login-form").onsubmit = async (event) => {
+  event.preventDefault();
+  if (mode === "online" && room) {
+    toast("請先離開目前房間，再切換登入帳號。");
+    return;
+  }
+  try {
+    const response = await fetch("/api/login", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        loginName: $("#account-login-name").value,
+        password: $("#account-login-password").value,
+      }),
+    });
+    const payload = (await response.json().catch(() => null)) as {
+      readonly error?: string;
+    } | null;
+    if (!response.ok) throw new Error(payload?.error ?? "登入失敗");
+    $("#account-login-password").value = "";
+    await loadProfile();
+    refreshSocketIdentity();
+    toast("已登入；已恢復此帳號的好友與戰績");
+  } catch (error: unknown) {
+    toast(errorMessage(error));
+  }
+};
+
+$("#account-logout").onclick = async () => {
+  if (mode === "online" && room) {
+    toast("請先離開目前房間，再登出此裝置。");
+    return;
+  }
+  try {
+    const response = await fetch("/api/session", {
+      method: "DELETE",
+      credentials: "same-origin",
+    });
+    if (!response.ok) throw new Error("無法登出");
+    await ensureProductSession("");
+    refreshSocketIdentity();
+    await loadProfile();
+    toast("已登出此裝置");
+  } catch (error: unknown) {
+    toast(errorMessage(error));
+  }
+};
+
+$("#privacy-settings-form").onsubmit = async (event) => {
+  event.preventDefault();
+  try {
+    const response = await fetch("/api/me", {
+      method: "PATCH",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        friendInvites: (
+          document.querySelector("#setting-friend-invites") as HTMLInputElement
+        ).checked,
+        showOnlineStatus: (
+          document.querySelector("#setting-online-status") as HTMLInputElement
+        ).checked,
+        showInLeaderboard: (
+          document.querySelector("#setting-leaderboard") as HTMLInputElement
+        ).checked,
+      }),
+    });
+    const payload = (await response.json().catch(() => null)) as {
+      readonly error?: string;
+    } | null;
+    if (!response.ok) throw new Error(payload?.error ?? "無法儲存隱私設定");
+    await loadProfile();
+    await loadFriends();
+    toast("已儲存隱私設定");
+  } catch (error: unknown) {
+    toast(errorMessage(error));
+  }
+};
+
+$("#copy-profile-code").onclick = () => {
+  const code = $("#profile-player-code").value;
+  const clipboard = navigator.clipboard as Clipboard | undefined;
+  if (!code) return;
+  if (!clipboard) {
+    $("#profile-player-code").select();
+    return;
+  }
+  void clipboard.writeText(code).then(
+    () => {
+      toast("已複製玩家代碼");
+    },
+    () => {
+      $("#profile-player-code").select();
+      toast("已選取玩家代碼，請手動複製。");
+    },
+  );
+};
+
 function rules(game?: GameId): void {
   const keys = game ? [game] : [...GAME_IDS];
   $("#rules-content").innerHTML = keys
@@ -668,7 +1581,9 @@ async function ensureProductSession(displayName: string): Promise<void> {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ displayName: displayName.trim() || "訪客棋手" }),
+    body: JSON.stringify(
+      displayName.trim() ? { displayName: displayName.trim() } : {},
+    ),
   });
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as {
@@ -677,6 +1592,54 @@ async function ensureProductSession(displayName: string): Promise<void> {
     throw new Error(payload?.error ?? "無法建立玩家 session");
   }
 }
+
+function sendCurrentRoomJoin(ws: WebSocket, currentRoom: ClientRoom): void {
+  const invitation = pendingRoomInvite;
+  if (invitation && invitation.roomCode === currentRoom.code) {
+    pendingRoomInviteJoin = true;
+    ws.send(
+      JSON.stringify({
+        type: "join",
+        code: invitation.roomCode,
+        invitationId: invitation.id,
+        invitationToken: invitation.entryToken,
+      }),
+    );
+    return;
+  }
+  ws.send(
+    JSON.stringify({
+      type: "join",
+      code: currentRoom.code,
+      token: currentRoom.token,
+    }),
+  );
+}
+
+async function reconnectCurrentRoom(): Promise<void> {
+  const currentRoom = room;
+  if (!currentRoom) return;
+  try {
+    await connect();
+    const ws = socket;
+    if (ws) sendCurrentRoomJoin(ws, currentRoom);
+  } catch {
+    toast("重新連線失敗，請稍後再試。");
+  }
+}
+
+function refreshSocketIdentity(): void {
+  identityReconnectRequested = true;
+  if (
+    socket?.readyState === WebSocket.OPEN ||
+    socket?.readyState === WebSocket.CONNECTING
+  ) {
+    socket.close(4002, "Identity changed");
+    return;
+  }
+  if (room) void reconnectCurrentRoom();
+}
+
 function connect(): Promise<void> {
   if (socket?.readyState === 1) return Promise.resolve();
   if (connectionPromise) return connectionPromise;
@@ -697,6 +1660,8 @@ function connect(): Promise<void> {
     ws.onmessage = ({ data }: MessageEvent<unknown>) => {
       const msg = JSON.parse(String(data)) as SocketMessage;
       if (msg.type === "joined") {
+        pendingRoomInviteJoin = false;
+        pendingRoomInvite = null;
         cancelAI();
         riichiWorker?.terminate();
         riichiWorker = null;
@@ -770,7 +1735,13 @@ function connect(): Promise<void> {
         networkBusy = false;
         $("#start-button").disabled = false;
         toast(msg.message);
-        if (msg.message.includes("找不到房間") && room) {
+        if (pendingRoomInviteJoin) {
+          pendingRoomInviteJoin = false;
+          pendingRoomInvite = null;
+          room = null;
+          mode = "ai";
+          lobby();
+        } else if (msg.message.includes("找不到房間") && room) {
           leaveRoom();
           mode = "ai";
           lobby();
@@ -789,6 +1760,17 @@ function connect(): Promise<void> {
       connected = false;
       connectionPromise = null;
       networkBusy = false;
+      if (event.code === 4002) {
+        if (identityReconnectRequested) {
+          identityReconnectRequested = false;
+          reject(Error("登入狀態已更新"));
+          if (room && mode === "online") void reconnectCurrentRoom();
+        } else {
+          reject(Error("登入狀態已逾期"));
+          toast("登入狀態已過期，請登入後重新連線；目前房間資料已保留。");
+        }
+        return;
+      }
       if (matchmakingTicket) {
         matchmakingTicket = null;
         $("#start-button").disabled = false;
@@ -805,13 +1787,7 @@ function connect(): Promise<void> {
                 const currentRoom = room;
                 const currentSocket = socket;
                 if (currentRoom && currentSocket)
-                  currentSocket.send(
-                    JSON.stringify({
-                      type: "join",
-                      code: currentRoom.code,
-                      token: currentRoom.token,
-                    }),
-                  );
+                  sendCurrentRoomJoin(currentSocket, currentRoom);
               } catch {
                 // 下一輪重連會再次嘗試。
               }

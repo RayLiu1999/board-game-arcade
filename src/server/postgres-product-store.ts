@@ -9,10 +9,22 @@ import {
   RATING_VERSION,
   type RatingResult,
 } from "./rating.js";
-import { hashSessionToken } from "./product-security.js";
+import {
+  createOpaqueToken,
+  createPublicCode,
+  hashSessionToken,
+  matchesSessionToken,
+  normalizeAccountName,
+  normalizePublicCode,
+} from "./product-security.js";
 import {
   MATCH_EVENT_SCHEMA_VERSION,
   PRODUCT_SCHEMA_VERSION,
+  FRIEND_REQUEST_PENDING_LIMIT,
+  FRIEND_REQUEST_REJECTION_COOLDOWN_MS,
+  ROOM_ENTRY_TOKEN_TTL_MS,
+  ROOM_INVITATION_PENDING_LIMIT,
+  ROOM_INVITATION_TTL_MS,
   ProductStoreConflictError,
   ProductStoreNotFoundError,
   defaultUserPreferences,
@@ -26,6 +38,15 @@ import {
   type CreateMatchInput,
   type CreateSessionInput,
   type CreateUserInput,
+  type AccountCredentialRecord,
+  type CreateRoomInvitationInput,
+  type RoomInvitationPreview,
+  type AcceptedRoomInvitation,
+  type FriendRequestRecord,
+  type FriendConnection,
+  type FriendRequestPreview,
+  type BlockedUserPreview,
+  type SocialOverview,
   type MatchEvent,
   type MatchHistoryPage,
   type ListMatchHistoryInput,
@@ -37,6 +58,7 @@ import {
   type ParticipantResult,
   type ProductStore,
   type RatingRecord,
+  type LeaderboardEntry,
   type RecordAuditInput,
   type SessionRecord,
   type UpdateUserPreferencesInput,
@@ -51,6 +73,8 @@ import { runMigrations } from "./postgres-migrations.js";
 
 interface UserRow {
   readonly id: string;
+  readonly public_code: string;
+  readonly login_name: string | null;
   readonly display_name: string;
   readonly status: string;
   readonly created_at: Date;
@@ -74,6 +98,7 @@ interface PreferenceRow {
   readonly history_public: boolean;
   readonly friend_invites: boolean;
   readonly show_online_status: boolean;
+  readonly show_in_leaderboard: boolean;
   readonly updated_at: Date;
 }
 
@@ -146,6 +171,55 @@ interface RatingRow {
   readonly provisional: boolean;
   readonly rating_version: number;
   readonly updated_at: Date;
+}
+
+interface FriendRequestRow {
+  readonly id: string;
+  readonly requester_id: string;
+  readonly recipient_id: string;
+  readonly status: string;
+  readonly created_at: Date;
+  readonly responded_at: Date | null;
+}
+
+interface FriendListRow {
+  readonly user_id: string;
+  readonly display_name: string;
+  readonly created_at: Date;
+  readonly is_online: boolean | null;
+}
+
+interface LeaderboardRow {
+  readonly rank: number | string;
+  readonly public_code: string;
+  readonly display_name: string;
+  readonly rating: number;
+  readonly games_played: number;
+  readonly wins: number;
+  readonly losses: number;
+  readonly draws: number;
+  readonly provisional: boolean;
+}
+
+interface RoomInvitationRow {
+  readonly id: string;
+  readonly room_code: string;
+  readonly game: string;
+  readonly inviter_id: string;
+  readonly inviter_name: string;
+  readonly recipient_id: string;
+  readonly status: string;
+  readonly created_at: Date;
+  readonly expires_at: Date;
+  readonly entry_token_hash: string | null;
+  readonly entry_token_expires_at: Date | null;
+}
+
+type BlockedUserRow = FriendListRow;
+
+interface SocialUserStatusRow {
+  readonly id: string;
+  readonly status: string;
 }
 
 export interface PostgresProductStoreOptions {
@@ -244,11 +318,48 @@ const sameJson = (left: unknown, right: unknown): boolean =>
 
 const parseUser = (row: UserRow): UserRecord => ({
   id: row.id,
+  publicCode: row.public_code,
+  loginName: row.login_name,
   displayName: row.display_name,
   status: validUserStatus(row.status),
   createdAt: requiredMillis(row.created_at),
   lastActiveAt: requiredMillis(row.last_active_at),
 });
+
+const parseFriendRequest = (row: FriendRequestRow): FriendRequestRecord => {
+  if (
+    row.status !== "pending" &&
+    row.status !== "accepted" &&
+    row.status !== "rejected" &&
+    row.status !== "cancelled"
+  )
+    throw new Error(`資料庫好友邀請狀態格式錯誤：${row.status}`);
+  return {
+    id: row.id,
+    requesterId: row.requester_id,
+    recipientId: row.recipient_id,
+    status: row.status,
+    createdAt: requiredMillis(row.created_at),
+    respondedAt: dateMillis(row.responded_at),
+  };
+};
+
+const parseRoomInvitationPreview = (
+  row: RoomInvitationRow,
+): RoomInvitationPreview => {
+  if (row.status !== "pending" && row.status !== "accepted")
+    throw new Error(`資料庫房間邀請狀態格式錯誤：${row.status}`);
+  return {
+    id: row.id,
+    roomCode: row.room_code,
+    game: validGame(row.game),
+    inviterId: row.inviter_id,
+    inviterName: row.inviter_name,
+    status: row.status,
+    createdAt: requiredMillis(row.created_at),
+    expiresAt: requiredMillis(row.expires_at),
+  };
+};
 
 const parseSession = (row: SessionRow): SessionRecord => ({
   id: row.id,
@@ -267,6 +378,7 @@ const parsePreferences = (row: PreferenceRow): UserPreferences => ({
   historyPublic: row.history_public,
   friendInvites: row.friend_invites,
   showOnlineStatus: row.show_online_status,
+  showInLeaderboard: row.show_in_leaderboard,
   updatedAt: requiredMillis(row.updated_at),
 });
 
@@ -377,6 +489,12 @@ const validateRatedParticipants = (
 
 type Queryable = Pick<PoolClient, "query">;
 
+const hasConstraint = (error: unknown, constraint: string): boolean =>
+  typeof error === "object" &&
+  error !== null &&
+  "constraint" in error &&
+  error.constraint === constraint;
+
 export class PostgresProductStore implements ProductStore {
   private readonly pool: Pool;
 
@@ -402,25 +520,41 @@ export class PostgresProductStore implements ProductStore {
   async createUser(input: CreateUserInput): Promise<UserRecord> {
     const now = timestamp(input.createdAt);
     const id = input.id ?? randomUUID();
-    const result = await this.pool.query<UserRow>(
-      `
-        INSERT INTO qiju_users (
-          id, display_name, status, created_at, last_active_at
-        )
-        VALUES ($1, $2, 'active', $3, $3)
-        RETURNING id, display_name, status, created_at, last_active_at
-      `,
-      [id, normalizedName(input.displayName), new Date(now)],
-    );
-    const row = result.rows[0];
-    if (!row) throw new Error("建立使用者失敗");
-    return parseUser(row);
+    const explicitCode = input.publicCode !== undefined;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const publicCode = normalizePublicCode(
+        input.publicCode ?? createPublicCode(),
+      );
+      try {
+        const result = await this.pool.query<UserRow>(
+          `
+            INSERT INTO qiju_users (
+              id, public_code, display_name, status, created_at, last_active_at
+            )
+            VALUES ($1, $2, $3, 'active', $4, $4)
+            RETURNING id, public_code, login_name, display_name, status,
+                      created_at, last_active_at
+          `,
+          [id, publicCode, normalizedName(input.displayName), new Date(now)],
+        );
+        const row = result.rows[0];
+        if (!row) throw new Error("建立使用者失敗");
+        return parseUser(row);
+      } catch (error: unknown) {
+        if (!hasConstraint(error, "qiju_users_public_code_uidx")) throw error;
+        if (explicitCode) throw new ProductStoreConflictError("玩家代碼已存在");
+        if (attempt === 4)
+          throw new ProductStoreConflictError("無法產生唯一玩家代碼，請重試");
+      }
+    }
+    throw new Error("建立使用者失敗");
   }
 
   async getUser(id: string): Promise<UserRecord | null> {
     const result = await this.pool.query<UserRow>(
       `
-        SELECT id, display_name, status, created_at, last_active_at
+        SELECT id, public_code, login_name, display_name, status,
+               created_at, last_active_at
         FROM qiju_users
         WHERE id = $1
       `,
@@ -428,6 +562,61 @@ export class PostgresProductStore implements ProductStore {
     );
     const row = result.rows[0];
     return row ? parseUser(row) : null;
+  }
+
+  async upgradeAccount(
+    userId: string,
+    loginName: string,
+    passwordHash: string,
+    at = Date.now(),
+  ): Promise<UserRecord> {
+    const normalizedLogin = normalizeAccountName(loginName);
+    if (!passwordHash.startsWith("scrypt$"))
+      throw new Error("密碼驗證值格式錯誤");
+    let result;
+    try {
+      result = await this.pool.query<UserRow>(
+        `
+          UPDATE qiju_users
+          SET login_name = $2, password_hash = $3, last_active_at = $4
+          WHERE id = $1 AND login_name IS NULL AND status = 'active'
+          RETURNING id, public_code, login_name, display_name, status,
+                    created_at, last_active_at
+        `,
+        [userId, normalizedLogin, passwordHash, new Date(timestamp(at))],
+      );
+    } catch (error: unknown) {
+      if (hasConstraint(error, "qiju_users_login_name_uidx"))
+        throw new ProductStoreConflictError("帳號名稱已被使用");
+      throw error;
+    }
+    const row = result.rows[0];
+    if (row) return parseUser(row);
+    const user = await this.getUser(userId);
+    if (!user) throw new ProductStoreNotFoundError(`找不到使用者：${userId}`);
+    if (user.loginName)
+      throw new ProductStoreConflictError("此玩家身份已綁定登入帳號");
+    throw new ProductStoreConflictError("此玩家目前無法升級帳號");
+  }
+
+  async findAccountByLoginName(
+    loginName: string,
+  ): Promise<AccountCredentialRecord | null> {
+    const result = await this.pool.query<
+      UserRow & { readonly password_hash: string }
+    >(
+      `
+        SELECT id, public_code, login_name, display_name, status,
+               created_at, last_active_at, password_hash
+        FROM qiju_users
+        WHERE login_name = $1
+      `,
+      [normalizeAccountName(loginName)],
+    );
+    const row = result.rows[0];
+    return row
+      ? { user: parseUser(row), passwordHash: row.password_hash }
+      : null;
   }
 
   async updateUserProfile(
@@ -440,7 +629,8 @@ export class PostgresProductStore implements ProductStore {
         UPDATE qiju_users
         SET display_name = COALESCE($2, display_name), last_active_at = $3
         WHERE id = $1
-        RETURNING id, display_name, status, created_at, last_active_at
+        RETURNING id, public_code, login_name, display_name, status,
+                  created_at, last_active_at
       `,
       [
         id,
@@ -459,7 +649,8 @@ export class PostgresProductStore implements ProductStore {
     const result = await this.pool.query<PreferenceRow>(
       `
         SELECT user_id, locale, theme, sound_enabled, history_public,
-               friend_invites, show_online_status, updated_at
+               friend_invites, show_online_status, show_in_leaderboard,
+               updated_at
         FROM qiju_user_preferences
         WHERE user_id = $1
       `,
@@ -483,9 +674,9 @@ export class PostgresProductStore implements ProductStore {
       `
         INSERT INTO qiju_user_preferences (
           user_id, locale, theme, sound_enabled, history_public,
-          friend_invites, show_online_status, updated_at
+          friend_invites, show_online_status, show_in_leaderboard, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         ON CONFLICT (user_id) DO UPDATE SET
           locale = EXCLUDED.locale,
           theme = EXCLUDED.theme,
@@ -493,9 +684,11 @@ export class PostgresProductStore implements ProductStore {
           history_public = EXCLUDED.history_public,
           friend_invites = EXCLUDED.friend_invites,
           show_online_status = EXCLUDED.show_online_status,
+          show_in_leaderboard = EXCLUDED.show_in_leaderboard,
           updated_at = EXCLUDED.updated_at
         RETURNING user_id, locale, theme, sound_enabled, history_public,
-                  friend_invites, show_online_status, updated_at
+                  friend_invites, show_online_status, show_in_leaderboard,
+                  updated_at
       `,
       [
         updated.userId,
@@ -505,6 +698,7 @@ export class PostgresProductStore implements ProductStore {
         updated.historyPublic,
         updated.friendInvites,
         updated.showOnlineStatus,
+        updated.showInLeaderboard,
         new Date(updated.updatedAt),
       ],
     );
@@ -522,6 +716,44 @@ export class PostgresProductStore implements ProductStore {
       throw new ProductStoreNotFoundError(`找不到使用者：${id}`);
   }
 
+  async touchPresence(
+    connectionId: string,
+    userId: string,
+    touchedAt: number,
+    expiresAt: number,
+  ): Promise<void> {
+    if (
+      !Number.isFinite(touchedAt) ||
+      !Number.isFinite(expiresAt) ||
+      expiresAt <= touchedAt ||
+      expiresAt - touchedAt > 120_000
+    )
+      throw new Error("玩家上線租約時間格式錯誤");
+    const result = await this.pool.query<{ readonly connection_id: string }>(
+      `
+        INSERT INTO qiju_user_presence (
+          connection_id, user_id, touched_at, expires_at
+        )
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (connection_id) DO UPDATE SET
+          touched_at = EXCLUDED.touched_at,
+          expires_at = EXCLUDED.expires_at
+        WHERE qiju_user_presence.user_id = EXCLUDED.user_id
+        RETURNING connection_id
+      `,
+      [connectionId, userId, new Date(touchedAt), new Date(expiresAt)],
+    );
+    if (result.rowCount !== 1)
+      throw new ProductStoreConflictError("玩家連線身份不一致");
+  }
+
+  async removePresence(connectionId: string): Promise<void> {
+    await this.pool.query(
+      `DELETE FROM qiju_user_presence WHERE connection_id = $1`,
+      [connectionId],
+    );
+  }
+
   async setUserStatus(
     id: string,
     status: UserStatus,
@@ -532,13 +764,715 @@ export class PostgresProductStore implements ProductStore {
         UPDATE qiju_users
         SET status = $2, last_active_at = $3
         WHERE id = $1
-        RETURNING id, display_name, status, created_at, last_active_at
+        RETURNING id, public_code, login_name, display_name, status,
+                  created_at, last_active_at
       `,
       [id, status, new Date(timestamp(at))],
     );
     const row = result.rows[0];
     if (!row) throw new ProductStoreNotFoundError(`找不到使用者：${id}`);
     return parseUser(row);
+  }
+
+  async getSocialOverview(userId: string): Promise<SocialOverview> {
+    const user = await this.getUser(userId);
+    if (!user) throw new ProductStoreNotFoundError(`找不到使用者：${userId}`);
+    const [friends, incoming, outgoing, blocked] = await Promise.all([
+      this.pool.query<FriendListRow>(
+        `
+          SELECT u.id AS user_id, u.display_name, f.created_at,
+                 CASE WHEN COALESCE(p.show_online_status, FALSE)
+                   THEN EXISTS (
+                     SELECT 1 FROM qiju_user_presence online
+                     WHERE online.user_id = u.id AND online.expires_at > now()
+                   )
+                   ELSE NULL
+                 END AS is_online
+          FROM qiju_friendships f
+          JOIN qiju_users u
+            ON u.id = CASE WHEN f.user_low = $1 THEN f.user_high ELSE f.user_low END
+          LEFT JOIN qiju_user_preferences p ON p.user_id = u.id
+          WHERE f.user_low = $1 OR f.user_high = $1
+          ORDER BY u.display_name, u.id
+        `,
+        [userId],
+      ),
+      this.pool.query<FriendRequestRow & { readonly display_name: string }>(
+        `
+          SELECT r.id, r.requester_id, r.recipient_id, r.status,
+                 r.created_at, r.responded_at, u.display_name
+          FROM qiju_friend_requests r
+          JOIN qiju_users u ON u.id = r.requester_id
+          WHERE r.recipient_id = $1 AND r.status = 'pending'
+          ORDER BY r.created_at, r.id
+        `,
+        [userId],
+      ),
+      this.pool.query<FriendRequestRow & { readonly display_name: string }>(
+        `
+          SELECT r.id, r.requester_id, r.recipient_id, r.status,
+                 r.created_at, r.responded_at, u.display_name
+          FROM qiju_friend_requests r
+          JOIN qiju_users u ON u.id = r.recipient_id
+          WHERE r.requester_id = $1 AND r.status = 'pending'
+          ORDER BY r.created_at, r.id
+        `,
+        [userId],
+      ),
+      this.pool.query<BlockedUserRow>(
+        `
+          SELECT u.id AS user_id, u.display_name, b.created_at
+          FROM qiju_user_blocks b
+          JOIN qiju_users u ON u.id = b.blocked_user_id
+          WHERE b.blocker_id = $1
+          ORDER BY u.display_name, u.id
+        `,
+        [userId],
+      ),
+    ]);
+    const requestPreview = (
+      row: FriendRequestRow & { readonly display_name: string },
+      otherUserId: string,
+    ): FriendRequestPreview => ({
+      id: row.id,
+      userId: otherUserId,
+      displayName: row.display_name,
+      createdAt: requiredMillis(row.created_at),
+    });
+    const friendEntries: FriendConnection[] = friends.rows.map((row) => ({
+      userId: row.user_id,
+      displayName: row.display_name,
+      since: requiredMillis(row.created_at),
+      online: row.is_online,
+    }));
+    const blockedEntries: BlockedUserPreview[] = blocked.rows.map((row) => ({
+      userId: row.user_id,
+      displayName: row.display_name,
+      blockedAt: requiredMillis(row.created_at),
+    }));
+    return {
+      friendCode: user.publicCode,
+      friends: friendEntries,
+      incomingRequests: incoming.rows.map((row) =>
+        requestPreview(row, row.requester_id),
+      ),
+      outgoingRequests: outgoing.rows.map((row) =>
+        requestPreview(row, row.recipient_id),
+      ),
+      blockedUsers: blockedEntries,
+    };
+  }
+
+  async areUsersBlocked(
+    firstUserId: string,
+    secondUserId: string,
+  ): Promise<boolean> {
+    const result = await this.pool.query(
+      `
+        SELECT 1
+        FROM qiju_user_blocks
+        WHERE (blocker_id = $1 AND blocked_user_id = $2)
+           OR (blocker_id = $2 AND blocked_user_id = $1)
+        LIMIT 1
+      `,
+      [firstUserId, secondUserId],
+    );
+    return result.rowCount === 1;
+  }
+
+  async getBlockedUserIds(userId: string): Promise<readonly string[]> {
+    const result = await this.pool.query<{ readonly other_user_id: string }>(
+      `
+        SELECT CASE WHEN blocker_id = $1 THEN blocked_user_id ELSE blocker_id END
+          AS other_user_id
+        FROM qiju_user_blocks
+        WHERE blocker_id = $1 OR blocked_user_id = $1
+        ORDER BY other_user_id
+      `,
+      [userId],
+    );
+    return result.rows.map((row) => row.other_user_id);
+  }
+
+  async createRoomInvitation(
+    input: CreateRoomInvitationInput,
+    at?: number,
+  ): Promise<RoomInvitationPreview> {
+    const now = timestamp(at);
+    const roomCode = input.roomCode.trim().toUpperCase();
+    if (!/^[A-Z0-9]{6}$/.test(roomCode)) throw new Error("房間代碼格式錯誤");
+    if (input.inviterId === input.recipientId)
+      throw new ProductStoreConflictError("不能邀請自己加入房間");
+    if (!isGameId(input.game)) throw new Error("棋種格式錯誤");
+    return this.transaction(async (client) => {
+      await this.assertRoomInvitationAllowed(
+        client,
+        input.inviterId,
+        input.recipientId,
+      );
+      await client.query(
+        `
+          UPDATE qiju_room_invites
+          SET status = 'cancelled', responded_at = $3,
+              entry_token_hash = NULL, entry_token_expires_at = NULL
+          WHERE room_code = $1 AND recipient_id = $2
+            AND status IN ('pending', 'accepted') AND expires_at <= $3
+        `,
+        [roomCode, input.recipientId, new Date(now)],
+      );
+      const existing = await client.query<RoomInvitationRow>(
+        `
+          SELECT i.id, i.room_code, i.game, i.inviter_id,
+                 inviter.display_name AS inviter_name, i.recipient_id,
+                 i.status, i.created_at, i.expires_at,
+                 i.entry_token_hash, i.entry_token_expires_at
+          FROM qiju_room_invites i
+          JOIN qiju_users inviter ON inviter.id = i.inviter_id
+          WHERE i.room_code = $1 AND i.recipient_id = $2
+            AND i.status IN ('pending', 'accepted') AND i.expires_at > $3
+          ORDER BY i.created_at DESC
+          LIMIT 1
+          FOR UPDATE OF i
+        `,
+        [roomCode, input.recipientId, new Date(now)],
+      );
+      const existingRow = existing.rows[0];
+      if (existingRow) return parseRoomInvitationPreview(existingRow);
+
+      const count = await client.query<{ readonly total: number | string }>(
+        `
+          SELECT count(*) AS total
+          FROM qiju_room_invites
+          WHERE inviter_id = $1
+            AND status IN ('pending', 'accepted')
+            AND expires_at > $2
+        `,
+        [input.inviterId, new Date(now)],
+      );
+      if (Number(count.rows[0]?.total ?? 0) >= ROOM_INVITATION_PENDING_LIMIT)
+        throw new ProductStoreConflictError("待處理的房間邀請已達上限");
+
+      const createdAt = new Date(now);
+      const expiresAt = new Date(now + ROOM_INVITATION_TTL_MS);
+      const result = await client.query<RoomInvitationRow>(
+        `
+          INSERT INTO qiju_room_invites (
+            id, room_code, game, inviter_id, recipient_id, status,
+            created_at, expires_at, responded_at,
+            entry_token_hash, entry_token_expires_at
+          )
+          VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, NULL, NULL, NULL)
+          RETURNING id, room_code, game, inviter_id, ''::text AS inviter_name,
+                    recipient_id, status, created_at, expires_at,
+                    entry_token_hash, entry_token_expires_at
+        `,
+        [
+          randomUUID(),
+          roomCode,
+          input.game,
+          input.inviterId,
+          input.recipientId,
+          createdAt,
+          expiresAt,
+        ],
+      );
+      const row = result.rows[0];
+      if (!row) throw new Error("建立房間邀請失敗");
+      const inviter = await client.query<{ readonly display_name: string }>(
+        `SELECT display_name FROM qiju_users WHERE id = $1`,
+        [input.inviterId],
+      );
+      const inviterName = inviter.rows[0]?.display_name;
+      if (!inviterName) throw new ProductStoreNotFoundError("找不到房間邀請者");
+      return {
+        ...parseRoomInvitationPreview(row),
+        inviterName,
+      };
+    });
+  }
+
+  async listRoomInvitations(
+    recipientId: string,
+    at?: number,
+  ): Promise<readonly RoomInvitationPreview[]> {
+    const user = await this.getUser(recipientId);
+    if (!user)
+      throw new ProductStoreNotFoundError(`找不到使用者：${recipientId}`);
+    const result = await this.pool.query<RoomInvitationRow>(
+      `
+        SELECT i.id, i.room_code, i.game, i.inviter_id,
+               u.display_name AS inviter_name, i.recipient_id, i.status,
+               i.created_at, i.expires_at, i.entry_token_hash,
+               i.entry_token_expires_at
+        FROM qiju_room_invites i
+        JOIN qiju_users u ON u.id = i.inviter_id
+        WHERE i.recipient_id = $1
+          AND i.status IN ('pending', 'accepted')
+          AND i.expires_at > $2
+        ORDER BY i.created_at DESC, i.id DESC
+      `,
+      [recipientId, new Date(timestamp(at))],
+    );
+    return result.rows.map(parseRoomInvitationPreview);
+  }
+
+  async acceptRoomInvitation(
+    recipientId: string,
+    invitationId: string,
+    at?: number,
+  ): Promise<AcceptedRoomInvitation> {
+    const now = timestamp(at);
+    return this.transaction(async (client) => {
+      const inviterResult = await client.query<{
+        readonly inviter_id: string;
+      }>(
+        `
+          SELECT inviter_id
+          FROM qiju_room_invites
+          WHERE id = $1 AND recipient_id = $2
+        `,
+        [invitationId, recipientId],
+      );
+      const inviterId = inviterResult.rows[0]?.inviter_id;
+      if (!inviterId) throw new ProductStoreNotFoundError("找不到房間邀請");
+      // Lock the social pair before the invite row, matching create/block order.
+      await this.assertRoomInvitationAllowed(client, inviterId, recipientId);
+      const result = await client.query<RoomInvitationRow>(
+        `
+          SELECT i.id, i.room_code, i.game, i.inviter_id,
+                 u.display_name AS inviter_name, i.recipient_id, i.status,
+                 i.created_at, i.expires_at, i.entry_token_hash,
+                 i.entry_token_expires_at
+          FROM qiju_room_invites i
+          JOIN qiju_users u ON u.id = i.inviter_id
+          WHERE i.id = $1 AND i.recipient_id = $2
+          FOR UPDATE OF i
+        `,
+        [invitationId, recipientId],
+      );
+      const row = result.rows[0];
+      if (!row) throw new ProductStoreNotFoundError("找不到房間邀請");
+      if (
+        (row.status !== "pending" && row.status !== "accepted") ||
+        requiredMillis(row.expires_at) <= now
+      )
+        throw new ProductStoreConflictError("房間邀請已過期或已處理");
+      await this.assertRoomInvitationAllowed(
+        client,
+        row.inviter_id,
+        recipientId,
+      );
+      const entryToken = createOpaqueToken();
+      const entryTokenExpiresAt = Math.min(
+        requiredMillis(row.expires_at),
+        now + ROOM_ENTRY_TOKEN_TTL_MS,
+      );
+      const updated = await client.query(
+        `
+          UPDATE qiju_room_invites
+          SET status = 'accepted', responded_at = $3,
+              entry_token_hash = $4, entry_token_expires_at = $5
+          WHERE id = $1 AND recipient_id = $2
+        `,
+        [
+          invitationId,
+          recipientId,
+          new Date(now),
+          hashSessionToken(entryToken),
+          new Date(entryTokenExpiresAt),
+        ],
+      );
+      if (updated.rowCount !== 1) throw new Error("接受房間邀請失敗");
+      return {
+        ...parseRoomInvitationPreview({ ...row, status: "accepted" }),
+        entryToken,
+      };
+    });
+  }
+
+  async rejectRoomInvitation(
+    recipientId: string,
+    invitationId: string,
+    at?: number,
+  ): Promise<void> {
+    const now = timestamp(at);
+    await this.transaction(async (client) => {
+      const result = await client.query<{ readonly status: string }>(
+        `
+          SELECT status FROM qiju_room_invites
+          WHERE id = $1 AND recipient_id = $2
+          FOR UPDATE
+        `,
+        [invitationId, recipientId],
+      );
+      const invite = result.rows[0];
+      if (!invite) throw new ProductStoreNotFoundError("找不到房間邀請");
+      if (invite.status !== "pending" && invite.status !== "accepted")
+        throw new ProductStoreConflictError("房間邀請已處理");
+      await client.query(
+        `
+          UPDATE qiju_room_invites
+          SET status = 'rejected', responded_at = $3,
+              entry_token_hash = NULL, entry_token_expires_at = NULL
+          WHERE id = $1 AND recipient_id = $2
+        `,
+        [invitationId, recipientId, new Date(now)],
+      );
+    });
+  }
+
+  async consumeRoomInvitation(
+    recipientId: string,
+    invitationId: string,
+    roomCode: string,
+    entryToken: string,
+    at?: number,
+  ): Promise<void> {
+    const now = timestamp(at);
+    await this.transaction(async (client) => {
+      const inviterResult = await client.query<{
+        readonly inviter_id: string;
+      }>(
+        `
+          SELECT inviter_id
+          FROM qiju_room_invites
+          WHERE id = $1 AND recipient_id = $2
+        `,
+        [invitationId, recipientId],
+      );
+      const inviterId = inviterResult.rows[0]?.inviter_id;
+      if (!inviterId)
+        throw new ProductStoreConflictError("房間邀請已失效，請重新接受邀請");
+      // Lock the social pair before the invite row to prevent block/unfriend deadlocks.
+      await this.assertRoomInvitationAllowed(client, inviterId, recipientId);
+      const result = await client.query<RoomInvitationRow>(
+        `
+          SELECT i.id, i.room_code, i.game, i.inviter_id,
+                 u.display_name AS inviter_name, i.recipient_id, i.status,
+                 i.created_at, i.expires_at, i.entry_token_hash,
+                 i.entry_token_expires_at
+          FROM qiju_room_invites i
+          JOIN qiju_users u ON u.id = i.inviter_id
+          WHERE i.id = $1 AND i.recipient_id = $2
+          FOR UPDATE OF i
+        `,
+        [invitationId, recipientId],
+      );
+      const invite = result.rows[0];
+      if (
+        !invite ||
+        invite.room_code !== roomCode.toUpperCase() ||
+        (invite.status !== "accepted" && invite.status !== "joined") ||
+        requiredMillis(invite.expires_at) <= now ||
+        !invite.entry_token_hash ||
+        !invite.entry_token_expires_at ||
+        requiredMillis(invite.entry_token_expires_at) <= now ||
+        !matchesSessionToken(entryToken, invite.entry_token_hash)
+      )
+        throw new ProductStoreConflictError("房間邀請已失效，請重新接受邀請");
+      await this.assertRoomInvitationAllowed(
+        client,
+        invite.inviter_id,
+        recipientId,
+      );
+      const updated = await client.query(
+        `
+          UPDATE qiju_room_invites
+          SET status = 'joined', responded_at = $3
+          WHERE id = $1 AND recipient_id = $2
+            AND status IN ('accepted', 'joined')
+        `,
+        [invitationId, recipientId, new Date(now)],
+      );
+      if (updated.rowCount !== 1)
+        throw new ProductStoreConflictError("房間邀請已失效，請重新接受邀請");
+    });
+  }
+
+  async sendFriendRequest(
+    requesterId: string,
+    friendCode: string,
+    at?: number,
+  ): Promise<FriendRequestRecord> {
+    let normalizedCode = friendCode.trim().toLowerCase();
+    try {
+      normalizedCode = normalizePublicCode(friendCode);
+    } catch {
+      // Existing UUID codes remain usable while players transition to QJ codes.
+    }
+    const recipientResult = await this.pool.query<{ readonly id: string }>(
+      `
+        SELECT id
+        FROM qiju_users
+        WHERE public_code = $1 OR id::text = $2
+        LIMIT 1
+      `,
+      [normalizedCode, normalizedCode],
+    );
+    const recipientId = recipientResult.rows[0]?.id;
+    if (!recipientId) throw new ProductStoreNotFoundError("找不到這個玩家代碼");
+    if (requesterId === recipientId)
+      throw new ProductStoreConflictError("不能邀請自己成為好友");
+    const createdAt = timestamp(at);
+    return this.transaction(async (client) => {
+      await this.lockSocialUsers(client, [requesterId, recipientId]);
+      const preference = await client.query<{ readonly allowed: boolean }>(
+        `
+          SELECT COALESCE(p.friend_invites, TRUE) AS allowed
+          FROM qiju_users u
+          LEFT JOIN qiju_user_preferences p ON p.user_id = u.id
+          WHERE u.id = $1
+        `,
+        [recipientId],
+      );
+      if (preference.rows[0]?.allowed === false)
+        throw new ProductStoreConflictError("對方目前不接受好友邀請");
+      if (await this.areSocialUsersBlocked(client, requesterId, recipientId))
+        throw new ProductStoreConflictError("無法向這位玩家傳送好友邀請");
+      const friendship = await client.query(
+        `
+          SELECT 1 FROM qiju_friendships
+          WHERE user_low = LEAST($1::uuid, $2::uuid)
+            AND user_high = GREATEST($1::uuid, $2::uuid)
+        `,
+        [requesterId, recipientId],
+      );
+      if (friendship.rowCount)
+        throw new ProductStoreConflictError("你們已經是好友");
+      const pending = await client.query(
+        `
+          SELECT 1 FROM qiju_friend_requests
+          WHERE status = 'pending'
+            AND LEAST(requester_id, recipient_id) = LEAST($1::uuid, $2::uuid)
+            AND GREATEST(requester_id, recipient_id) = GREATEST($1::uuid, $2::uuid)
+        `,
+        [requesterId, recipientId],
+      );
+      if (pending.rowCount)
+        throw new ProductStoreConflictError("你們已有待處理的好友邀請");
+      const pendingCount = await client.query<{
+        readonly total: number | string;
+      }>(
+        `
+          SELECT COUNT(*) AS total
+          FROM qiju_friend_requests
+          WHERE requester_id = $1 AND status = 'pending'
+        `,
+        [requesterId],
+      );
+      if (
+        Number(pendingCount.rows[0]?.total ?? 0) >= FRIEND_REQUEST_PENDING_LIMIT
+      )
+        throw new ProductStoreConflictError("待處理的好友邀請已達上限");
+      const latestRequest = await client.query<{
+        readonly status: string;
+        readonly responded_at: Date | null;
+      }>(
+        `
+          SELECT status, responded_at
+          FROM qiju_friend_requests
+          WHERE LEAST(requester_id, recipient_id) = LEAST($1::uuid, $2::uuid)
+            AND GREATEST(requester_id, recipient_id) = GREATEST($1::uuid, $2::uuid)
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1
+        `,
+        [requesterId, recipientId],
+      );
+      const latest = latestRequest.rows[0];
+      if (
+        latest?.status === "rejected" &&
+        latest.responded_at !== null &&
+        createdAt - requiredMillis(latest.responded_at) <
+          FRIEND_REQUEST_REJECTION_COOLDOWN_MS
+      )
+        throw new ProductStoreConflictError("對方拒絕過邀請，請稍後再傳送");
+      const result = await client.query<FriendRequestRow>(
+        `
+          INSERT INTO qiju_friend_requests (
+            id, requester_id, recipient_id, status, created_at, responded_at
+          )
+          VALUES ($1, $2, $3, 'pending', $4, NULL)
+          RETURNING id, requester_id, recipient_id, status, created_at, responded_at
+        `,
+        [randomUUID(), requesterId, recipientId, new Date(createdAt)],
+      );
+      const row = result.rows[0];
+      if (!row) throw new Error("建立好友邀請失敗");
+      return parseFriendRequest(row);
+    });
+  }
+
+  async respondToFriendRequest(
+    recipientId: string,
+    requestId: string,
+    action: "accept" | "reject",
+    at?: number,
+  ): Promise<FriendRequestRecord> {
+    return this.transaction(async (client) => {
+      const current = await client.query<FriendRequestRow>(
+        `
+          SELECT id, requester_id, recipient_id, status, created_at, responded_at
+          FROM qiju_friend_requests
+          WHERE id = $1 AND recipient_id = $2
+        `,
+        [requestId, recipientId],
+      );
+      const request = current.rows[0];
+      if (!request || request.status !== "pending")
+        throw new ProductStoreNotFoundError("找不到待處理的好友邀請");
+      await this.lockSocialUsers(client, [recipientId, request.requester_id]);
+      if (
+        action === "accept" &&
+        (await this.areSocialUsersBlocked(
+          client,
+          recipientId,
+          request.requester_id,
+        ))
+      )
+        throw new ProductStoreConflictError("解除封鎖後才能接受好友邀請");
+      const respondedAt = timestamp(at);
+      const updated = await client.query<FriendRequestRow>(
+        `
+          UPDATE qiju_friend_requests
+          SET status = $3, responded_at = $4
+          WHERE id = $1 AND recipient_id = $2 AND status = 'pending'
+          RETURNING id, requester_id, recipient_id, status, created_at, responded_at
+        `,
+        [
+          requestId,
+          recipientId,
+          action === "accept" ? "accepted" : "rejected",
+          new Date(respondedAt),
+        ],
+      );
+      const row = updated.rows[0];
+      if (!row) throw new ProductStoreConflictError("好友邀請已經處理");
+      if (action === "accept")
+        await client.query(
+          `
+            INSERT INTO qiju_friendships (user_low, user_high, created_at)
+            VALUES (
+              LEAST($1::uuid, $2::uuid),
+              GREATEST($1::uuid, $2::uuid),
+              $3
+            )
+            ON CONFLICT (user_low, user_high) DO NOTHING
+          `,
+          [request.requester_id, recipientId, new Date(respondedAt)],
+        );
+      return parseFriendRequest(row);
+    });
+  }
+
+  async cancelFriendRequest(
+    requesterId: string,
+    requestId: string,
+  ): Promise<void> {
+    await this.transaction(async (client) => {
+      const current = await client.query<FriendRequestRow>(
+        `
+          SELECT id, requester_id, recipient_id, status, created_at, responded_at
+          FROM qiju_friend_requests
+          WHERE id = $1 AND requester_id = $2
+        `,
+        [requestId, requesterId],
+      );
+      const request = current.rows[0];
+      if (!request || request.status !== "pending")
+        throw new ProductStoreNotFoundError("找不到待處理的好友邀請");
+      await this.lockSocialUsers(client, [requesterId, request.recipient_id]);
+      const result = await client.query(
+        `
+          UPDATE qiju_friend_requests
+          SET status = 'cancelled', responded_at = NOW()
+          WHERE id = $1 AND requester_id = $2 AND status = 'pending'
+        `,
+        [requestId, requesterId],
+      );
+      if (result.rowCount !== 1)
+        throw new ProductStoreConflictError("好友邀請已經處理");
+    });
+  }
+
+  async removeFriend(userId: string, friendId: string): Promise<void> {
+    if (userId === friendId)
+      throw new ProductStoreConflictError("無法移除自己");
+    await this.transaction(async (client) => {
+      await this.lockSocialUsers(client, [userId, friendId]);
+      const result = await client.query(
+        `
+          DELETE FROM qiju_friendships
+          WHERE user_low = LEAST($1::uuid, $2::uuid)
+            AND user_high = GREATEST($1::uuid, $2::uuid)
+        `,
+        [userId, friendId],
+      );
+      if (result.rowCount !== 1)
+        throw new ProductStoreNotFoundError("找不到好友關係");
+      await this.cancelRoomInvitationsBetween(
+        client,
+        userId,
+        friendId,
+        Date.now(),
+      );
+    });
+  }
+
+  async blockUser(
+    userId: string,
+    blockedUserId: string,
+    at?: number,
+  ): Promise<void> {
+    if (userId === blockedUserId)
+      throw new ProductStoreConflictError("不能封鎖自己");
+    await this.transaction(async (client) => {
+      await this.lockSocialUsers(client, [userId, blockedUserId]);
+      const now = timestamp(at);
+      await client.query(
+        `
+          INSERT INTO qiju_user_blocks (blocker_id, blocked_user_id, created_at)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (blocker_id, blocked_user_id) DO NOTHING
+        `,
+        [userId, blockedUserId, new Date(now)],
+      );
+      await client.query(
+        `
+          DELETE FROM qiju_friendships
+          WHERE user_low = LEAST($1::uuid, $2::uuid)
+            AND user_high = GREATEST($1::uuid, $2::uuid)
+        `,
+        [userId, blockedUserId],
+      );
+      await client.query(
+        `
+          UPDATE qiju_friend_requests
+          SET status = 'cancelled', responded_at = $3
+          WHERE status = 'pending'
+            AND LEAST(requester_id, recipient_id) = LEAST($1::uuid, $2::uuid)
+            AND GREATEST(requester_id, recipient_id) = GREATEST($1::uuid, $2::uuid)
+        `,
+        [userId, blockedUserId, new Date(now)],
+      );
+      await this.cancelRoomInvitationsBetween(
+        client,
+        userId,
+        blockedUserId,
+        now,
+      );
+    });
+  }
+
+  async unblockUser(userId: string, blockedUserId: string): Promise<void> {
+    if (userId === blockedUserId)
+      throw new ProductStoreConflictError("不能解除對自己的封鎖");
+    await this.transaction(async (client) => {
+      await this.lockSocialUsers(client, [userId, blockedUserId]);
+      await client.query(
+        `DELETE FROM qiju_user_blocks WHERE blocker_id = $1 AND blocked_user_id = $2`,
+        [userId, blockedUserId],
+      );
+    });
   }
 
   async createSession(input: CreateSessionInput): Promise<SessionRecord> {
@@ -936,6 +1870,40 @@ export class PostgresProductStore implements ProductStore {
     return result.rows.map(parseRating);
   }
 
+  async getLeaderboard(
+    game: GameId,
+    limit = 50,
+  ): Promise<readonly LeaderboardEntry[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+      throw new Error("排行榜筆數必須介於 1 到 100");
+    const result = await this.pool.query<LeaderboardRow>(
+      `
+        SELECT rank() OVER (ORDER BY r.rating DESC)::int AS rank,
+               u.public_code, u.display_name, r.rating, r.games_played,
+               r.wins, r.losses, r.draws, r.provisional
+        FROM qiju_ratings r
+        JOIN qiju_users u ON u.id = r.user_id AND u.status = 'active'
+        JOIN qiju_user_preferences p
+          ON p.user_id = u.id AND p.show_in_leaderboard = TRUE
+        WHERE r.game = $1 AND r.games_played > 0
+        ORDER BY r.rating DESC, u.public_code ASC
+        LIMIT $2
+      `,
+      [game, limit],
+    );
+    return result.rows.map((row) => ({
+      rank: Number(row.rank),
+      publicCode: row.public_code,
+      displayName: row.display_name,
+      rating: row.rating,
+      gamesPlayed: row.games_played,
+      wins: row.wins,
+      losses: row.losses,
+      draws: row.draws,
+      provisional: row.provisional,
+    }));
+  }
+
   async completeMatch(input: CompleteMatchInput): Promise<MatchRecord> {
     return this.transaction(async (client) => {
       const current = await this.loadMatch(client, input.matchId, true);
@@ -1232,6 +2200,96 @@ export class PostgresProductStore implements ProductStore {
       [id],
     );
     return parseMatch(matchRow, participantResult.rows.map(parseParticipant));
+  }
+
+  private async lockSocialUsers(
+    client: PoolClient,
+    userIds: readonly [string, string],
+  ): Promise<void> {
+    const result = await client.query<SocialUserStatusRow>(
+      `
+        SELECT id, status
+        FROM qiju_users
+        WHERE id = ANY($1::uuid[])
+        ORDER BY id
+        FOR UPDATE
+      `,
+      [userIds],
+    );
+    if (result.rows.length !== 2)
+      throw new ProductStoreNotFoundError("找不到好友邀請對象");
+    if (result.rows.some((row) => row.status !== "active"))
+      throw new ProductStoreConflictError("此玩家目前無法使用好友功能");
+  }
+
+  private async areSocialUsersBlocked(
+    client: PoolClient,
+    firstUserId: string,
+    secondUserId: string,
+  ): Promise<boolean> {
+    const result = await client.query(
+      `
+        SELECT 1
+        FROM qiju_user_blocks
+        WHERE (blocker_id = $1 AND blocked_user_id = $2)
+           OR (blocker_id = $2 AND blocked_user_id = $1)
+        LIMIT 1
+      `,
+      [firstUserId, secondUserId],
+    );
+    return result.rowCount === 1;
+  }
+
+  private async assertRoomInvitationAllowed(
+    client: PoolClient,
+    inviterId: string,
+    recipientId: string,
+  ): Promise<void> {
+    await this.lockSocialUsers(client, [inviterId, recipientId]);
+    if (await this.areSocialUsersBlocked(client, inviterId, recipientId))
+      throw new ProductStoreConflictError("目前無法邀請這位玩家");
+    const friendship = await client.query(
+      `
+        SELECT 1 FROM qiju_friendships
+        WHERE user_low = LEAST($1::uuid, $2::uuid)
+          AND user_high = GREATEST($1::uuid, $2::uuid)
+      `,
+      [inviterId, recipientId],
+    );
+    if (friendship.rowCount !== 1)
+      throw new ProductStoreConflictError("房間邀請只提供給好友");
+    const preference = await client.query<{ readonly allowed: boolean }>(
+      `
+        SELECT COALESCE(p.friend_invites, TRUE) AS allowed
+        FROM qiju_users u
+        LEFT JOIN qiju_user_preferences p ON p.user_id = u.id
+        WHERE u.id = $1
+      `,
+      [recipientId],
+    );
+    if (preference.rows[0]?.allowed === false)
+      throw new ProductStoreConflictError("對方目前不接受好友邀請");
+  }
+
+  private async cancelRoomInvitationsBetween(
+    client: PoolClient,
+    firstUserId: string,
+    secondUserId: string,
+    at: number,
+  ): Promise<void> {
+    await client.query(
+      `
+        UPDATE qiju_room_invites
+        SET status = 'cancelled', responded_at = $3,
+            entry_token_hash = NULL, entry_token_expires_at = NULL
+        WHERE status IN ('pending', 'accepted')
+          AND (
+            (inviter_id = $1 AND recipient_id = $2)
+            OR (inviter_id = $2 AND recipient_id = $1)
+          )
+      `,
+      [firstUserId, secondUserId, new Date(at)],
+    );
   }
 
   private async transaction<Value>(
