@@ -1,6 +1,6 @@
 # 棋聚 QIJU
 
-繁體中文棋類遊戲大全，提供八款可玩的遊戲、三種對戰模式與手機版排版。
+繁體中文棋類遊戲大全，提供八款可玩的遊戲、AI／同機／線上對戰與手機版排版。兩人棋類也支援競技私人房及公開配對。
 
 ## 啟動
 
@@ -102,6 +102,8 @@ PostgreSQL migration 會在伺服器啟動時自動初始化。日麻 live sessi
 - **AI 對戰**：七款棋提供三段難度、可選先後手，AI 在 Web Worker 中執行。西洋棋／象棋／將棋／跳棋／黑白棋使用有搜尋預算的 minimax 與 alpha-beta 剪枝；五子棋使用連線攻防評分；圍棋使用提子、氣與鄰接評分。日麻採用 `@kobalab/majiang-ai` 的獨立日麻策略（固定棋力），你與三位 AI 同桌。不是 Stockfish、Pikafish 或 KataGo，沒有棋力等級保證。AI 圍棋由玩家標記死棋並確認，AI 自動接受此標記。
 - **同機模式**：棋類為兩位玩家輪流操作；日麻為四人交接裝置，切換座位前遮住手牌，點擊確認才顯示自己的牌，圍棋數子需先後按黑白雙方確認。
 - **線上好友**：建立六碼私人房間，朋友輸入代碼或開啟邀請連結。棋類支援雙人，日麻支援四人（可 AI 補位）。伺服器驗證合法操作，全部真人同意後可再戰；棋類可認輸，日麻離席會暫停，不提供連線悔棋。
+- **競技私人房**：七種兩人棋類可建立 rated 房間。伺服器在合法終局後以各棋種獨立的 ELO 分數結算；可透過 `/api/me/ratings` 查看自己的評分與戰績。
+- **公開配對**：七種兩人棋類可選 rated 或 casual，依棋種與模式尋找對手。rated 配對會參考雙方分數，並隨等待時間放寬範圍；目前只提供不限時對局。等待 ticket 兩分鐘後到期，也可主動取消。佇列保存在單一伺服器記憶體，重新啟動後需重新排隊。
 
 棋類 AI 與同機對局自動保存在瀏覽器，回大廳可繼續。悔棋快照只保留於本次對局記憶體，重新整理後不能回溯先前手數。
 
@@ -117,9 +119,9 @@ PostgreSQL migration 會在伺服器啟動時自動初始化。日麻 live sessi
 
 將整個 Node.js 專案部署到支援長連線 WebSocket 的主機，以 HTTPS 網址存取，反向代理需轉送 WebSocket Upgrade。無法只上傳 `public/` 到純靜態主機就獲得連線對戰。
 
-有設定 `DATABASE_URL` 時，一般棋類房間會保存於 PostgreSQL，伺服器重啟後可以用原本的 room code 與座位 token 恢復；日麻 live session 暫不持久化，仍會在伺服器重啟後清除。所有真人皆離線後 30 分鐘清理。相同分頁重新整理或暫時斷線，會用 sessionStorage 的座位 token 重連；伺服器資料庫只保存 token hash，不要分享 token。主動按「返回大廳」離開會清除該分頁的重連資訊，已佔用的席位仍保留，需重新建立房間才能換人。
+有設定 `DATABASE_URL` 時，一般棋類房間與日麻 live session 都會保存於 PostgreSQL；伺服器重啟後，玩家需以原本的 room code 與座位 token 重新連線。所有真人皆離線後 30 分鐘清理。相同分頁重新整理或暫時斷線，會用 sessionStorage 的座位 token 重連；伺服器資料庫只保存 token hash，不要分享 token。主動按「返回大廳」離開會清除該分頁的重連資訊，已佔用的席位仍保留，需重新建立房間才能換人。
 
-尚未包含帳號、排行榜、公開配對、觀戰或對局時鐘。七種棋為兩人棋；日麻為四人桌，可混合真人與 AI。
+目前使用自動建立的 guest 身份，尚未提供正式帳號登入、排行榜、觀戰或對局時鐘。七種棋為兩人棋；日麻為四人桌，可混合真人與 AI。
 
 ## 日式麻將
 
@@ -128,7 +130,7 @@ PostgreSQL migration 會在伺服器啟動時自動初始化。日麻 live sessi
 - 計分與順位由規則引擎處理。開啟赤寶牌、食斷、一發、裏寶牌、槓寶牌、雙響、三家和流局、途中流局、流局聽牌罰符、聽牌連莊與飛人；不延長至下一場。單局練習在一次和牌或流局結算後結束；東風／半莊依莊家連莊與終局規則進行。
 - 線上四人房滿員自動開局，或由第一位房主按「以 AI 補齊並開局」。開局後不能替換 AI 座位。所有真人同意才會再戰。
 - 伺服器保存完整牌山，各瀏覽器只收到自己的暗牌、各家公開副露／牌河／分數、合法選項與依法公開的和牌／聽牌結果；不傳送其他人的暗牌或牌山。
-- 任一真人斷線會暫停整桌，原分頁用座位 token 重連後恢復。日麻 session 尚未持久化，伺服器重啟會清除進行中的日麻對局。
+- 任一真人斷線會暫停整桌，原分頁用座位 token 重連後恢復。使用 PostgreSQL 時，日麻 session 也會保存版本化 snapshot；伺服器重啟後需真人重新連線才會繼續。
 - 本機日麻由專用 Web Worker 執行，不提供悔棋或重新整理續局。離開本機牌桌前會提醒。
 - 同機遮罩防止一般交接時看到他人的手牌，並非同一裝置上的防作弊安全機制。
 
@@ -142,7 +144,7 @@ pnpm run test:e2e
 pnpm run test:postgres # 需設定 QIJU_TEST_DATABASE_URL
 ```
 
-`pnpm test` 使用 Node 內建測試執行器，涵蓋棋規（含將棋打入／升變／打步詰）、七種棋的規則契約、可重現走訪、fast-check 合法路徑與 reachable random positions 測試、協定訊息邊界、日麻合法選項／無役與振聽／符番／結算／暗牌隔離、AI 合法走法、WebSocket 兩端同步、非法／過期落子、滿房、斷線重連、認輸、再戰與 HTTP 檔案邊界，也包含 PostgreSQL adapter、identity/session、match event idempotency、guest claim、歷史／統計與重啟恢復測試（未設定專用 DB 時各 1 項 skip）。`pnpm run test:postgres` 會執行需要真實 PostgreSQL 的 adapter 與 server restart 測試，請使用獨立測試資料庫設定 `QIJU_TEST_DATABASE_URL`。`pnpm run test:e2e` 會先建置瀏覽器 bundle，再用 Playwright 驗證建立房間、加入房間與落子同步。整合測試會在本機開啟隨機連接埠；E2E 會啟動固定的 4173 連接埠。
+`pnpm test` 使用 Node 內建測試執行器，涵蓋棋規（含將棋打入／升變／打步詰）、七種棋的規則契約、可重現走訪、fast-check 合法路徑與 reachable random positions 測試、協定訊息邊界、日麻合法選項／無役與振聽／符番／結算／暗牌隔離、AI 合法走法、WebSocket 兩端同步、非法／過期落子、滿房、斷線重連、認輸、再戰與 HTTP 檔案邊界，也包含 PostgreSQL adapter、identity/session、match event idempotency、guest claim、歷史／統計、評分、公開配對與重啟恢復測試（未設定專用 DB 時各 1 項 skip）。`pnpm run test:postgres` 會執行需要真實 PostgreSQL 的 adapter 與 server restart 測試，請使用獨立測試資料庫設定 `QIJU_TEST_DATABASE_URL`。`pnpm run test:e2e` 會先建置瀏覽器 bundle，再用 Playwright 驗證私人房間與公開配對流程。整合測試會在本機開啟隨機連接埠；E2E 會啟動固定的 4173 連接埠。
 
 ## 程式結構
 

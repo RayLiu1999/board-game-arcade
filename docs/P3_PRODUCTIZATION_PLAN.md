@@ -18,7 +18,7 @@
 - P0 的 PostgreSQL `RoomStore`、一般棋類 snapshot、重啟恢復、token hash 與 TTL 已完成。
 - P1 的日麻 session snapshot／restore 已完成；多實例 Redis 仍保留到需要時再做。
 - Docker Compose 已能先執行 migration，再啟動應用程式；映像也可發布至 GHCR。
-- P3-A／P3-B 已補上 guest session、自己的對局歷史 API、個人偏好與基本統計；正式帳號合併、好友、積分與排行榜仍未開始。
+- P3-A／P3-B 已補上 guest session、自己的對局歷史 API、個人偏好與基本統計；P3-C 已加入各棋種 ELO 評分。正式帳號合併、好友與排行榜仍未開始。
 - 對戰聊天室與 emoji 已納入 P3-C／P3-E 規劃；P3-C 已完成聊天室、rated／ELO 與公開配對第一個切片，先支援對局玩家聊天、兩人一般棋類競技私人房與公開配對，觀戰聊天室仍未開始。
 - PostgreSQL 現在同時保存進行中的房間、產品化 match／事件與個人偏好，但仍不等於完整的社交與競技資料庫。
 
