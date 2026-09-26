@@ -137,7 +137,7 @@ PostgreSQL migration 會在伺服器啟動時自動初始化。日麻 live sessi
 
 日麻 Worker 已打包在 `public/riichi-worker.js`。修改 `lib/riichi-session.ts`、`src/riichi-worker.ts`、`src/shared/` 或更新套件後執行 `pnpm run build`。不需 CDN。
 
-西洋棋與圍棋對局可切換至 3D 棋盤原型；圍棋支援 9／13／19 路，19 路手機觸控先預覽交叉點、再點一次確認。3D 資源只在玩家開啟時載入，操作仍走同一份棋規與房間流程，並記住各遊戲的顯示選擇。WebGL 不可用或載入失敗時會保留 2D 棋盤。`pnpm run build` 會產生 `public/chess-3d.js`、`public/go-3d.js` 與共用的 `public/chunks/` 模組，不使用 CDN。
+西洋棋、圍棋與黑白棋對局可切換至 3D 棋盤；黑白棋顯示合法落點並在確認走子後播放翻面動畫，降低動態設定會直接顯示結果。圍棋支援 9／13／19 路，19 路手機觸控先預覽交叉點、再點一次確認。3D 資源只在玩家開啟時載入，操作仍走同一份棋規與房間流程，並記住各遊戲的顯示選擇。WebGL 不可用或載入失敗時會保留 2D 棋盤。`pnpm run build` 會產生 `public/chess-3d.js`、`public/go-3d.js`、`public/reversi-3d.js` 與共用的 `public/chunks/` 模組，不使用 CDN。
 
 ## 測試
 
@@ -187,7 +187,9 @@ src/client/chess-3d.ts   西洋棋 3D 棋盤原始碼
 src/client/go-3d.ts      圍棋 3D 棋盤原始碼
 public/chess-3d.js      按需載入的西洋棋 3D 模組
 public/go-3d.js         按需載入的圍棋 3D 模組
-public/chunks/          兩款 3D 棋盤共用的 Three.js 模組
+src/client/reversi-3d.ts 黑白棋 3D 棋盤原始碼
+public/reversi-3d.js    按需載入的黑白棋 3D 模組
+public/chunks/          三款 3D 棋盤共用的 Three.js 模組
 public/engine.js         由 src/shared/engine.ts 產生的瀏覽器 bundle
 public/shogi.js          由 src/shared/shogi.ts 產生的瀏覽器 bundle
 lib/riichi-session.ts    日麻權威對局、合法選項與各座位私密視圖
@@ -207,6 +209,7 @@ test/                   棋規與真實 WebSocket 整合測試
 test/e2e/room.spec.ts   Playwright 建立房間、加入房間與落子同步流程
 test/e2e/play-experience.spec.ts 2D／3D 操作、指標落子與 WebGL 回退
 test/e2e/go-3d.spec.ts  圍棋 3D 盤型、觸控、數子與回退
+test/e2e/reversi-3d.spec.ts 黑白棋 3D、翻面同步及三款渲染穩定性
 ```
 
 chess.js 的瀏覽器版本已附於專案內（BSD-2-Clause 授權亦附上）。更新 chess.js 套件時，請同步更新 `public/vendor/chess.js` 與授權，並執行測試。依賴與 API 參考：[chess.js](https://github.com/jhlywa/chess.js)、[ws](https://github.com/websockets/ws)。

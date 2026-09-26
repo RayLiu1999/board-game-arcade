@@ -341,8 +341,9 @@ export function createChess3DView(
 
   return {
     setFigures(visible) {
+      if (disposed) return;
       figures.setVisible(visible);
-      renderer.render(scene, camera);
+      if (!host.hidden) renderer.render(scene, camera);
     },
     update(board, selected, legalTargets, last, turn, ended) {
       figures.update(turn, ended);
@@ -394,9 +395,9 @@ export function createChess3DView(
     },
     resize,
     dispose() {
-      figures.dispose();
       if (disposed) return;
       disposed = true;
+      figures.dispose();
       if (animationFrame !== null) cancelAnimationFrame(animationFrame);
       resizeObserver.disconnect();
       renderer.domElement.removeEventListener("pointermove", handlePointerMove);

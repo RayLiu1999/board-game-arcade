@@ -32,6 +32,7 @@ import {
 import type { Difficulty } from "./ai.js";
 import type { Chess3DView } from "./chess-3d.js";
 import type { Go3DView } from "./go-3d.js";
+import type { Reversi3DView } from "./reversi-3d.js";
 
 type Mode = "ai" | "local" | "online";
 type SetupMode = Mode | "matchmaking" | "rated";
@@ -389,7 +390,7 @@ syncTableDepth();
 let tableFiguresEnabled = store.get("qiju-table-figures") !== false;
 function syncTableFigures(): void {
   const toggle = $("#table-figures-toggle");
-  toggle.hidden = !chess3DActive && !go3DActive;
+  toggle.hidden = !chess3DActive && !go3DActive && !reversi3DActive;
   toggle.setAttribute("aria-pressed", String(tableFiguresEnabled));
   toggle.setAttribute(
     "aria-label",
@@ -397,6 +398,7 @@ function syncTableFigures(): void {
   );
   chess3DView?.setFigures(tableFiguresEnabled);
   go3DView?.setFigures(tableFiguresEnabled);
+  reversi3DView?.setFigures(tableFiguresEnabled);
 }
 $("#table-figures-toggle").onclick = () => {
   tableFiguresEnabled = !tableFiguresEnabled;
@@ -651,6 +653,132 @@ $("#go-3d-scene").addEventListener("keydown", (event: KeyboardEvent) => {
   else return;
   event.preventDefault();
   describeGo3DCell(nextRow * current.cols + nextColumn);
+});
+let reversi3DView: Reversi3DView | null = null;
+let reversi3DActive = false;
+let reversi3DLoading = false;
+let reversi3DAwaitingSync = false;
+let reversi3DPreferred = store.get("qiju-reversi-view") === "3d";
+let focusedReversi3DCell = 19;
+function showReversi3D(active: boolean): void {
+  reversi3DActive = active;
+  syncTableFigures();
+  if (!active && state?.game === "reversi") {
+    focusedBoardCell = focusedReversi3DCell;
+    renderBoard();
+  }
+  $("#reversi-3d-scene").hidden = !active;
+  $(".board-wrap").hidden = active;
+  $("#play-screen").classList.toggle("reversi-3d-active", active);
+  const toggle = $("#reversi-3d-toggle");
+  toggle.setAttribute("aria-pressed", String(active));
+  toggle.textContent = active ? "返回 2D" : "3D 棋盤";
+  toggle.setAttribute(
+    "aria-label",
+    active ? "返回 2D 黑白棋棋盤" : "開啟 3D 黑白棋棋盤",
+  );
+  if (active) {
+    reversi3DView?.resize();
+    $("#reversi-3d-scene").focus({ preventScroll: true });
+  }
+}
+function describeReversi3DCell(index: number): void {
+  focusedReversi3DCell = index;
+  reversi3DView?.focus(index);
+  if (state?.game === "reversi")
+    $("#reversi-3d-coordinate").textContent = coordinate(state, index);
+  const label = $("#board")
+    .querySelector<HTMLElement>(`[data-cell="${String(index)}"]`)
+    ?.getAttribute("aria-label");
+  $("#reversi-3d-status").textContent =
+    label ?? `棋盤位置 ${String(index + 1)}`;
+}
+function activateReversi3DCell(index: number): void {
+  describeReversi3DCell(index);
+  $("#board")
+    .querySelector<HTMLElement>(`[data-cell="${String(index)}"]`)
+    ?.click();
+  $("#reversi-3d-scene").focus({ preventScroll: true });
+}
+async function enableReversi3D(): Promise<boolean> {
+  if (reversi3DLoading || state?.game !== "reversi") return false;
+  reversi3DLoading = true;
+  $("#reversi-3d-toggle").setAttribute("aria-busy", "true");
+  try {
+    const { createReversi3DView } = await import("./reversi-3d.js");
+    const current = state;
+    if (
+      $("#play-screen").hidden ||
+      $("#play-screen").dataset.playGame !== "reversi" ||
+      current.game !== "reversi"
+    )
+      return false;
+    if (!reversi3DView) {
+      focusedReversi3DCell = legalMoves(current)[0]?.to ?? 19;
+      reversi3DView = createReversi3DView(
+        $("#reversi-3d-scene"),
+        activateReversi3DCell,
+        () => {
+          showReversi3D(false);
+          reversi3DView?.dispose();
+          reversi3DView = null;
+          reversi3DPreferred = false;
+          store.set("qiju-reversi-view", "2d");
+          toast("3D 畫面已中斷，已切回 2D 棋盤");
+        },
+      );
+    }
+    reversi3DView.resetMotion();
+    showReversi3D(true);
+    renderBoard();
+    describeReversi3DCell(focusedReversi3DCell);
+    return true;
+  } catch {
+    showReversi3D(false);
+    reversi3DView?.dispose();
+    reversi3DView = null;
+    reversi3DPreferred = false;
+    store.set("qiju-reversi-view", "2d");
+    toast("此裝置無法載入 3D 棋盤，已保留 2D 棋盤");
+    return false;
+  } finally {
+    reversi3DLoading = false;
+    $("#reversi-3d-toggle").removeAttribute("aria-busy");
+  }
+}
+$("#reversi-3d-toggle").onclick = async () => {
+  if (reversi3DActive) {
+    reversi3DPreferred = false;
+    store.set("qiju-reversi-view", "2d");
+    showReversi3D(false);
+    return;
+  }
+  if (await enableReversi3D()) {
+    reversi3DPreferred = true;
+    store.set("qiju-reversi-view", "3d");
+  }
+};
+$("#reversi-3d-scene").addEventListener("keydown", (event: KeyboardEvent) => {
+  const current = state;
+  if (!reversi3DActive || current?.game !== "reversi") return;
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    activateReversi3DCell(focusedReversi3DCell);
+    return;
+  }
+  const row = Math.floor(focusedReversi3DCell / current.cols);
+  const column = focusedReversi3DCell % current.cols;
+  let nextRow = row;
+  let nextColumn = column;
+  if (event.key === "ArrowUp") nextRow = Math.max(0, row - 1);
+  else if (event.key === "ArrowDown")
+    nextRow = Math.min(current.rows - 1, row + 1);
+  else if (event.key === "ArrowLeft") nextColumn = Math.max(0, column - 1);
+  else if (event.key === "ArrowRight")
+    nextColumn = Math.min(current.cols - 1, column + 1);
+  else return;
+  event.preventDefault();
+  describeReversi3DCell(nextRow * current.cols + nextColumn);
 });
 const session = {
   get(): RoomResume | null {
@@ -1712,6 +1840,11 @@ function lobby() {
     go3DView.dispose();
     go3DView = null;
   }
+  if (reversi3DView) {
+    showReversi3D(false);
+    reversi3DView.dispose();
+    reversi3DView = null;
+  }
   cancelAI();
   riichiWorker?.terminate();
   riichiWorker = null;
@@ -1749,6 +1882,8 @@ function showGame(): void {
   if (state.game === "chess" && chess3DPreferred && !chess3DActive)
     void enableChess3D();
   if (state.game === "go" && go3DPreferred && !go3DActive) void enableGo3D();
+  if (state.game === "reversi" && reversi3DPreferred && !reversi3DActive)
+    void enableReversi3D();
   window.scrollTo(0, 0);
 }
 function startLocalRiichi(rounds = Number($("#riichi-rounds").value)): void {
@@ -2052,6 +2187,10 @@ function connect(): Promise<void> {
           go3DView?.resetMotion();
           go3DAwaitingSync = false;
         }
+        if (reversi3DAwaitingSync) {
+          reversi3DView?.resetMotion();
+          reversi3DAwaitingSync = false;
+        }
         if (fresh) showGame();
         else render();
       }
@@ -2085,6 +2224,7 @@ function connect(): Promise<void> {
       clearTimeout(timer);
       chess3DAwaitingSync = chess3DActive;
       go3DAwaitingSync = go3DActive;
+      reversi3DAwaitingSync = reversi3DActive;
       if (event.code === 4001) {
         room = null;
         session.set(null);
@@ -2239,6 +2379,12 @@ function render(): void {
   $("#play-screen").dataset.playGame = current.game;
   $("#chess-3d-toggle").hidden = current.game !== "chess";
   $("#go-3d-toggle").hidden = current.game !== "go";
+  $("#reversi-3d-toggle").hidden = current.game !== "reversi";
+  if (current.game !== "reversi" && reversi3DView) {
+    showReversi3D(false);
+    reversi3DView.dispose();
+    reversi3DView = null;
+  }
   if (current.game !== "chess" && chess3DView) {
     showChess3D(false);
     chess3DView.dispose();
@@ -2605,6 +2751,16 @@ function renderBoard(): void {
       s.board.map((piece) => (typeof piece === "number" ? piece : 0)),
       s.last?.to ?? null,
       s.dead,
+      s.turn,
+      s.winner !== null,
+    );
+  if (reversi3DActive && reversi3DView && s.game === "reversi")
+    reversi3DView.update(
+      s.board,
+      targets
+        .map((move) => move.to)
+        .filter((index): index is number => index !== undefined),
+      s.last?.to ?? null,
       s.turn,
       s.winner !== null,
     );

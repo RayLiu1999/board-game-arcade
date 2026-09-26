@@ -46,6 +46,7 @@ await build({
   entryPoints: {
     "chess-3d": "src/client/chess-3d.ts",
     "go-3d": "src/client/go-3d.ts",
+    "reversi-3d": "src/client/reversi-3d.ts",
   },
   outdir: "public",
   entryNames: "[name]",
@@ -55,7 +56,7 @@ await build({
 
 await build({
   ...browserOptions,
-  external: ["./chess-3d.js", "./go-3d.js"],
+  external: ["./chess-3d.js", "./go-3d.js", "./reversi-3d.js"],
   entryPoints: ["src/client/app.ts"],
   outfile: "public/app.js",
 });
