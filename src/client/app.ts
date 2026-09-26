@@ -365,6 +365,10 @@ $("#table-view-toggle").onclick = () => {
 syncTableDepth();
 function showChess3D(active: boolean): void {
   chess3DActive = active;
+  if (!active && state?.game === "chess") {
+    focusedBoardCell = focusedChess3DCell;
+    renderBoard();
+  }
   $("#chess-3d-scene").hidden = !active;
   $(".board-wrap").hidden = active;
   $("#play-screen").classList.toggle("chess-3d-active", active);
@@ -382,6 +386,9 @@ function showChess3D(active: boolean): void {
 }
 function describeChess3DCell(index: number): void {
   focusedChess3DCell = index;
+  chess3DView?.focus(index);
+  if (state?.game === "chess")
+    $("#chess-3d-coordinate").textContent = coordinate(state, index);
   const label = $("#board")
     .querySelector<HTMLElement>(`[data-cell="${String(index)}"]`)
     ?.getAttribute("aria-label");
@@ -419,6 +426,7 @@ $("#chess-3d-toggle").onclick = async () => {
         toast("3D 畫面已中斷，已切回 2D 棋盤");
       },
     );
+    chess3DView.resetMotion();
     showChess3D(true);
     renderBoard();
     describeChess3DCell(focusedChess3DCell);

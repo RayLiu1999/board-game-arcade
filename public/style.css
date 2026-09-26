@@ -2775,6 +2775,22 @@ select {
   height: 100%;
   touch-action: manipulation;
 }
+.chess-3d-coordinate {
+  position: absolute;
+  z-index: 1;
+  left: 12px;
+  bottom: 12px;
+  min-width: 2.5em;
+  padding: 5px 9px;
+  border: 1px solid #f6e3af88;
+  border-radius: 7px;
+  background: #182f2ccc;
+  color: #fff2c7;
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-align: center;
+  pointer-events: none;
+}
 .chess-3d-scene:focus-visible {
   outline: 3px solid #b09d55;
   outline-offset: 4px;

@@ -7,6 +7,8 @@ export interface Chess3DView {
     legalTargets: readonly number[],
     last: { readonly from?: number; readonly to?: number } | null,
   ): void;
+  focus(index: number): void;
+  resetMotion(): void;
   resize(): void;
   dispose(): void;
 }
@@ -125,6 +127,25 @@ export function createChess3DView(
     scene.add(square);
   }
 
+  const focusFrame = new THREE.Group();
+  const focusMaterial = standard(0xffedaa, {
+    emissive: 0x8e681b,
+    emissiveIntensity: 0.45,
+  });
+  const focusEdges: Array<[number, number, number, number]> = [
+    [0.94, 0.055, 0, -0.45],
+    [0.94, 0.055, 0, 0.45],
+    [0.055, 0.94, -0.45, 0],
+    [0.055, 0.94, 0.45, 0],
+  ];
+  for (const [width, depth, x, z] of focusEdges) {
+    const edge = new THREE.Mesh(box(width, 0.015, depth), focusMaterial);
+    edge.position.set(x, 0, z);
+    focusFrame.add(edge);
+  }
+  focusFrame.visible = false;
+  scene.add(focusFrame);
+
   const ivory = standard(0xf0e5c9, { roughness: 0.35, metalness: 0.1 });
   const charcoal = standard(0x263c36, { roughness: 0.4, metalness: 0.15 });
   const whiteBand = standard(0xb79d72, { metalness: 0.3, roughness: 0.35 });
@@ -213,20 +234,27 @@ export function createChess3DView(
   let lastIndices = new Set<number>();
   let hoveredIndex: number | null = null;
   let disposed = false;
-  let previousBoard = "";
+  let previousBoard: string[] | null = null;
   let animationFrame: number | null = null;
 
-  function animateLanding(piece: THREE.Group): void {
-    const restingY = piece.position.y;
+  function animateMove(piece: THREE.Group, from: number, to: number): void {
+    const [startX, startZ] = squarePosition(from);
+    const [endX, endZ] = squarePosition(to);
+    piece.position.set(startX, 0.29, startZ);
     const startedAt = performance.now();
     const tick = (now: number) => {
       if (disposed || host.hidden || document.hidden) {
-        piece.position.y = restingY;
+        piece.position.set(endX, 0.29, endZ);
         animationFrame = null;
         return;
       }
-      const progress = Math.min(1, (now - startedAt) / 240);
-      piece.position.y = restingY + (1 - progress) ** 2 * 0.45;
+      const progress = Math.min(1, (now - startedAt) / 320);
+      const eased = progress * progress * (3 - 2 * progress);
+      piece.position.set(
+        startX + (endX - startX) * eased,
+        0.29 + Math.sin(Math.PI * progress) * 0.48,
+        startZ + (endZ - startZ) * eased,
+      );
       renderer.render(scene, camera);
       animationFrame = progress < 1 ? requestAnimationFrame(tick) : null;
     };
@@ -310,10 +338,8 @@ export function createChess3DView(
     update(board, selected, legalTargets, last) {
       if (animationFrame !== null) cancelAnimationFrame(animationFrame);
       animationFrame = null;
-      const nextBoard = board.join(",");
-      const confirmedChange =
-        previousBoard !== "" && previousBoard !== nextBoard;
-      previousBoard = nextBoard;
+      const before = previousBoard;
+      previousBoard = [...board];
       pieceLayer.clear();
       const pieceGroups = new Map<number, THREE.Group>();
       board.forEach((code, index) => {
@@ -329,14 +355,32 @@ export function createChess3DView(
       colorSquares();
       resize();
       if (
-        confirmedChange &&
-        last?.to !== undefined &&
+        before &&
+        last?.from !== undefined &&
+        last.to !== undefined &&
+        before[last.from] &&
+        before[last.from]?.[0] === board[last.to]?.[0] &&
+        before[last.from] !== board[last.from] &&
+        before[last.to] !== board[last.to] &&
+        board.filter((piece, index) => piece !== before[index]).length <= 4 &&
         !window.matchMedia("(prefers-reduced-motion: reduce)").matches &&
         !document.hidden
       ) {
         const landedPiece = pieceGroups.get(last.to);
-        if (landedPiece) animateLanding(landedPiece);
+        if (landedPiece) animateMove(landedPiece, last.from, last.to);
       }
+    },
+    focus(index) {
+      if (disposed || index < 0 || index >= squares.length) return;
+      const [x, z] = squarePosition(index);
+      focusFrame.position.set(x, 0.279, z);
+      focusFrame.visible = true;
+      renderer.render(scene, camera);
+    },
+    resetMotion() {
+      previousBoard = null;
+      if (animationFrame !== null) cancelAnimationFrame(animationFrame);
+      animationFrame = null;
     },
     resize,
     dispose() {

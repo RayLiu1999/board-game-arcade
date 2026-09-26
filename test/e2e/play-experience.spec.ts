@@ -67,6 +67,7 @@ test("3D chess table shares the same moves as the 2D board", async ({
   expect(sceneRequests).toHaveLength(1);
   await expect(page.locator(".board-wrap")).toBeHidden();
   await expect(scene).toBeFocused();
+  await expect(page.locator("#chess-3d-coordinate")).toHaveText("E2");
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(scene).toBeInViewport();
   await page.setViewportSize({ width: 1280, height: 720 });
@@ -74,7 +75,9 @@ test("3D chess table shares the same moves as the 2D board", async ({
   await page.keyboard.press("Enter");
   await expect(page.locator('#board [data-cell="52"]')).toHaveClass(/selected/);
   await page.keyboard.press("ArrowUp");
+  await expect(page.locator("#chess-3d-coordinate")).toHaveText("E3");
   await page.keyboard.press("ArrowUp");
+  await expect(page.locator("#chess-3d-coordinate")).toHaveText("E4");
   await page.keyboard.press("Enter");
   await expect(page.locator("#move-count")).toHaveText("1 手");
 
@@ -82,6 +85,10 @@ test("3D chess table shares the same moves as the 2D board", async ({
   await expect(scene).toBeHidden();
   await expect(page.locator(".board-wrap")).toBeVisible();
   await expect(page.locator('#board [data-cell="36"] .piece')).toBeVisible();
+  await expect(page.locator('#board [data-cell="36"]')).toHaveAttribute(
+    "tabindex",
+    "0",
+  );
 });
 
 test("3D chess table accepts pointer moves on board squares", async ({
