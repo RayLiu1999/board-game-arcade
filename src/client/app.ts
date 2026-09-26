@@ -341,6 +341,23 @@ const store = {
     }
   },
 };
+let tableDepthEnabled = store.get("qiju-table-depth") !== false;
+function syncTableDepth(): void {
+  $("#play-screen").classList.toggle("table-depth", tableDepthEnabled);
+  const toggle = $("#table-view-toggle");
+  toggle.setAttribute("aria-pressed", String(tableDepthEnabled));
+  toggle.textContent = tableDepthEnabled ? "立體桌面" : "平面桌面";
+  toggle.setAttribute(
+    "aria-label",
+    tableDepthEnabled ? "關閉立體桌面效果" : "開啟立體桌面效果",
+  );
+}
+$("#table-view-toggle").onclick = () => {
+  tableDepthEnabled = !tableDepthEnabled;
+  store.set("qiju-table-depth", tableDepthEnabled);
+  syncTableDepth();
+};
+syncTableDepth();
 const session = {
   get(): RoomResume | null {
     try {
@@ -1895,6 +1912,7 @@ function canPlay(): boolean {
 function render(): void {
   const current = state;
   if (!current) return;
+  $("#play-screen").dataset.playGame = current.game;
   renderChat();
   const mahjong = current.game === "riichi";
   $(".play-layout").hidden = mahjong;
@@ -2043,6 +2061,8 @@ function render(): void {
       : ["chess", "xiangqi", "checkers", "shogi"].includes(s.game)
         ? "點選己方棋子，再點選標示的合法位置。"
         : "點選交叉點或空格落子；最後一手會以金色標記。";
+  $("#board-tip").textContent +=
+    " 鍵盤可用方向鍵移動、Enter 選取、Escape 取消。";
   $("#move-count").textContent = `${String(s.ply)} 手`;
   $("#history").innerHTML = s.history.length
     ? s.history
@@ -2091,11 +2111,22 @@ function renderPlayer(selector: string, side: PlayerSide): void {
         : "等待中";
   el.append(avatar, meta, status);
 }
+let focusedBoardCell = 0;
 function renderBoard(): void {
   const s = state;
   if (!isBoardState(s)) return;
   const board = $("#board"),
     lines = ["go", "gomoku", "xiangqi"].includes(s.game);
+  const activeCell =
+    document.activeElement?.closest<HTMLElement>("#board [data-cell]");
+  const activeCellIndex = activeCell ? Number(activeCell.dataset.cell) : null;
+  if (activeCellIndex !== null && Number.isInteger(activeCellIndex))
+    focusedBoardCell = activeCellIndex;
+  const activeDrop =
+    document.activeElement?.closest<HTMLElement>("[data-drop]");
+  const activeDropIndex = activeDrop?.dataset.drop;
+  const activeDropHand = activeDrop?.parentElement?.id;
+  focusedBoardCell = Math.min(focusedBoardCell, s.board.length - 1);
   board.style.setProperty("--cols", String(s.cols));
   board.style.setProperty("--rows", String(s.rows));
   board.className =
@@ -2178,12 +2209,16 @@ function renderBoard(): void {
     const pieceOwner = p ? owner(p) : 0;
     const pieceLabel =
       pieceOwner === 0 ? "" : ` ${playerName(s, pieceOwner)}${pieceName}`;
-    html += `<button class="${classes}" data-cell="${String(i)}" aria-label="${coordinate(s, i)}${p ? pieceLabel : " 空位"}" ${selected === i ? 'aria-pressed="true"' : ""}>${star ? '<span class="star-point"></span>' : ""}${piece}</button>`;
+    html += `<button class="${classes}" data-cell="${String(i)}" tabindex="${i === focusedBoardCell ? "0" : "-1"}" aria-label="${coordinate(s, i)}${p ? pieceLabel : " 空位"}" ${selected === i ? 'aria-pressed="true"' : ""}>${star ? '<span class="star-point"></span>' : ""}${piece}</button>`;
   }
   if (s.game === "xiangqi")
     html +=
       '<div class="palace-lines" style="top:5%"></div><div class="palace-lines" style="top:75%"></div><div class="river-label"><span>楚河</span><span>漢界</span></div>';
   board.innerHTML = html;
+  if (activeCellIndex !== null)
+    board
+      .querySelector<HTMLElement>(`[data-cell="${String(focusedBoardCell)}"]`)
+      ?.focus({ preventScroll: true });
   const hands: Array<readonly [string, PlayerSide]> = [
     ["#opponent-hand", playerSide(mode === "local" ? -1 : -human)],
     ["#self-hand", playerSide(mode === "local" ? 1 : human)],
@@ -2211,7 +2246,51 @@ function renderBoard(): void {
         }),
     );
   }
+  if (activeDropHand && activeDropIndex)
+    document
+      .querySelector<HTMLElement>(
+        `#${activeDropHand} [data-drop="${activeDropIndex}"]`,
+      )
+      ?.focus({ preventScroll: true });
 }
+$("#board").addEventListener("keydown", (event: KeyboardEvent) => {
+  const target = event.target as HTMLElement;
+  const cell = target.closest<HTMLElement>("[data-cell]");
+  const current = state;
+  if (!cell || !isBoardState(current)) return;
+  if (event.key === "Escape") {
+    if (selected !== null) {
+      event.preventDefault();
+      selected = null;
+      renderBoard();
+    }
+    return;
+  }
+  const index = Number(cell.dataset.cell);
+  const row = Math.floor(index / current.cols);
+  const column = index % current.cols;
+  let nextRow = row;
+  let nextColumn = column;
+  if (event.key === "ArrowUp") nextRow = Math.max(0, row - 1);
+  else if (event.key === "ArrowDown")
+    nextRow = Math.min(current.rows - 1, row + 1);
+  else if (event.key === "ArrowLeft") nextColumn = Math.max(0, column - 1);
+  else if (event.key === "ArrowRight")
+    nextColumn = Math.min(current.cols - 1, column + 1);
+  else return;
+  event.preventDefault();
+  const nextIndex = nextRow * current.cols + nextColumn;
+  if (nextIndex === index) return;
+  cell.tabIndex = -1;
+  focusedBoardCell = nextIndex;
+  const nextCell = $("#board").querySelector<HTMLElement>(
+    `[data-cell="${String(nextIndex)}"]`,
+  );
+  if (nextCell) {
+    nextCell.tabIndex = 0;
+    nextCell.focus();
+  }
+});
 $("#board").onclick = async (e: MouseEvent) => {
   const b = (e.target as Element | null)?.closest(
     "[data-cell]",
