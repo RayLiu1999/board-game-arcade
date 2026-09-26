@@ -46,6 +46,18 @@ test("players can create a room, join it, and make a move", async ({
   await guest.locator('#chat-form button[type="submit"]').click();
   await expect(page.locator("#chat-messages")).toContainText("👏");
 
+  await guest.setViewportSize({ width: 390, height: 844 });
+  await expect(guest.locator("#turn-title")).toBeVisible();
+  await expect(guest.locator("#chat-panel")).toBeHidden();
+  const mobileChat = guest.locator("#mobile-chat-toggle");
+  await expect(mobileChat).toBeVisible();
+  await expect(mobileChat).toContainText("2 則");
+  await mobileChat.click();
+  await expect(guest.locator("#chat-panel")).toBeVisible();
+  await guest.locator("#mobile-history-toggle").click();
+  await expect(guest.locator("#chat-panel")).toBeHidden();
+  await expect(guest.locator("#history-panel")).toBeVisible();
+
   await page.locator('#board .cell[data-cell="52"]').click();
   await expect(page.locator('#board .cell[data-cell="36"]')).toHaveClass(
     /legal/,
@@ -54,6 +66,9 @@ test("players can create a room, join it, and make a move", async ({
 
   await expect(page.locator("#move-count")).toHaveText("1 手");
   await expect(guest.locator("#move-count")).toHaveText("1 手");
+  await expect(guest.locator("#mobile-history-toggle")).toHaveText(
+    "紀錄 · 1 手",
+  );
   await expect(
     guest.locator('#board .cell[data-cell="36"] .piece'),
   ).toBeVisible();

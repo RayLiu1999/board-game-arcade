@@ -1136,6 +1136,9 @@ footer i {
 .history-panel {
   margin-top: 18px;
 }
+.mobile-panel-tabs {
+  display: none;
+}
 .history-heading {
   display: flex;
   align-items: center;
@@ -2031,8 +2034,48 @@ select {
   .match-panel {
     grid-template-columns: 1fr;
   }
+  .mobile-panel-tabs {
+    display: flex;
+    gap: 8px;
+  }
+  .mobile-panel-tabs button {
+    flex: 1;
+    min-height: 40px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    color: #62735f;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .mobile-panel-tabs button[aria-expanded="true"] {
+    border-color: #7a936e;
+    background: #e9f0e4;
+    color: #304a36;
+  }
+  .mobile-panel-tabs button:focus-visible {
+    outline: 3px solid #a7b995;
+    outline-offset: 2px;
+  }
+  .mobile-panel-tabs button[hidden] {
+    display: none;
+  }
   .history-panel {
+    display: none;
     margin-top: 0;
+  }
+  #play-screen[data-mobile-panel="history"] .history-panel {
+    display: block;
+  }
+  #play-screen:not(.riichi-screen) .chat-panel:not([hidden]) {
+    display: none;
+  }
+  #play-screen:not(.riichi-screen)[data-mobile-panel="chat"]
+    .chat-panel:not([hidden]) {
+    display: block;
+  }
+  #play-screen:not(.riichi-screen) .play-layout {
+    padding-bottom: 0;
   }
   .cell {
     font-size: clamp(20px, 8vw, 48px);

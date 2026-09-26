@@ -46,6 +46,32 @@ test("table depth and keyboard board controls work during a local match", async 
   await expect(destination).toBeFocused();
 });
 
+test("phone match keeps controls visible and opens history on demand", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.locator('[data-game="chess"]').click();
+  await page.locator('[data-mode="local"]').click();
+  await page.locator("#start-button").click();
+
+  await expect(page.locator("#turn-title")).toBeVisible();
+  await expect(page.locator("#restart-button")).toBeVisible();
+  await expect(page.locator("#history-panel")).toBeHidden();
+  await expect(page.locator("#mobile-chat-toggle")).toBeHidden();
+  const history = page.locator("#mobile-history-toggle");
+  await expect(history).toHaveText("紀錄 · 0 手");
+  await history.click();
+  await expect(history).toHaveAttribute("aria-expanded", "true");
+  await expect(page.locator("#history-panel")).toBeVisible();
+  await history.click();
+  await expect(page.locator("#history-panel")).toBeHidden();
+
+  await page.locator("#chess-3d-toggle").click();
+  await expect(page.locator("#chess-3d-scene canvas")).toBeVisible();
+  await expect(page.locator("#turn-title")).toBeVisible();
+});
+
 test("3D chess table shares the same moves as the 2D board", async ({
   page,
 }) => {

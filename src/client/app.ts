@@ -343,6 +343,26 @@ const store = {
   },
 };
 let tableDepthEnabled = store.get("qiju-table-depth") !== false;
+type MobilePanel = "none" | "history" | "chat";
+let mobilePanel: MobilePanel = "none";
+function setMobilePanel(next: MobilePanel): void {
+  mobilePanel = next;
+  $("#play-screen").dataset.mobilePanel = next;
+  $("#mobile-history-toggle").setAttribute(
+    "aria-expanded",
+    String(next === "history"),
+  );
+  $("#mobile-chat-toggle").setAttribute(
+    "aria-expanded",
+    String(next === "chat"),
+  );
+}
+$("#mobile-history-toggle").onclick = () => {
+  setMobilePanel(mobilePanel === "history" ? "none" : "history");
+};
+$("#mobile-chat-toggle").onclick = () => {
+  setMobilePanel(mobilePanel === "chat" ? "none" : "chat");
+};
 let chess3DView: Chess3DView | null = null;
 let chess3DActive = false;
 let chess3DLoading = false;
@@ -1542,6 +1562,7 @@ $("#back-lobby").onclick = returnLobby;
 $("#nav-lobby").onclick = returnLobby;
 function showGame(): void {
   if (!state) return;
+  setMobilePanel("none");
   $("#setup-dialog").close();
   $("#join-dialog").close();
   $("#lobby").hidden = true;
@@ -1954,6 +1975,12 @@ function renderChat(): void {
   const input = $("#chat-input");
   const visible = mode === "online" && room !== null;
   panel.hidden = !visible;
+  const chatToggle = $("#mobile-chat-toggle");
+  chatToggle.hidden = !visible;
+  chatToggle.textContent = room?.chat.length
+    ? `聊天 · ${String(room.chat.length)} 則`
+    : "聊天";
+  if (!visible && mobilePanel === "chat") setMobilePanel("none");
   if (!visible || !room) {
     messages.replaceChildren();
     input.value = "";
@@ -2177,6 +2204,7 @@ function render(): void {
   $("#board-tip").textContent +=
     " 鍵盤可用方向鍵移動、Enter 選取、Escape 取消。";
   $("#move-count").textContent = `${String(s.ply)} 手`;
+  $("#mobile-history-toggle").textContent = `紀錄 · ${String(s.ply)} 手`;
   $("#history").innerHTML = s.history.length
     ? s.history
         .map(
