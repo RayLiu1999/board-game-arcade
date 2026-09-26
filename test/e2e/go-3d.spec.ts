@@ -23,8 +23,15 @@ for (const [size, center, coordinate] of [
     await page.locator("#go-3d-toggle").click();
     await expect(page.locator("#go-3d-scene canvas")).toBeVisible();
     expect(sceneRequests).toHaveLength(1);
+    await expect(page.locator("#table-figures-toggle")).toBeVisible();
+    await page.locator("#table-figures-toggle").click();
+    await expect(page.locator("#table-figures-toggle")).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
     await expect(page.locator("#go-3d-coordinate")).toHaveText(coordinate);
     await expect(page.locator(".board-wrap")).toBeHidden();
+    await page.locator("#go-3d-scene").focus();
     await page.keyboard.press("Enter");
     await expect(page.locator("#move-count")).toHaveText("1 手");
     await expect(

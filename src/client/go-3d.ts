@@ -1,11 +1,15 @@
 import * as THREE from "three";
+import { createTableFigures } from "./table-figures.js";
 
 export interface Go3DView {
   update(
     board: readonly number[],
     lastTo: number | null,
     dead: readonly number[],
+    turn: number,
+    ended: boolean,
   ): void;
+  setFigures(visible: boolean): void;
   focus(index: number): void;
   resetMotion(): void;
   resize(): void;
@@ -36,6 +40,7 @@ export function createGo3DView(
   host.append(renderer.domElement);
 
   const scene = new THREE.Scene();
+  const figures = createTableFigures(scene);
   scene.background = new THREE.Color(0x324d42);
   const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 100);
   camera.position.set(0, 10.8, 10.2);
@@ -259,7 +264,12 @@ export function createGo3DView(
   resizeObserver.observe(host);
 
   return {
-    update(board, lastTo, dead) {
+    setFigures(visible) {
+      figures.setVisible(visible);
+      renderer.render(scene, camera);
+    },
+    update(board, lastTo, dead, turn, ended) {
+      figures.update(turn, ended);
       clearPending();
       if (animationFrame !== null) cancelAnimationFrame(animationFrame);
       animationFrame = null;
@@ -318,6 +328,7 @@ export function createGo3DView(
     },
     resize,
     dispose() {
+      figures.dispose();
       if (disposed) return;
       disposed = true;
       if (animationFrame !== null) cancelAnimationFrame(animationFrame);

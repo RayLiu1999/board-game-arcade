@@ -386,8 +386,26 @@ $("#table-view-toggle").onclick = () => {
   syncTableDepth();
 };
 syncTableDepth();
+let tableFiguresEnabled = store.get("qiju-table-figures") !== false;
+function syncTableFigures(): void {
+  const toggle = $("#table-figures-toggle");
+  toggle.hidden = !chess3DActive && !go3DActive;
+  toggle.setAttribute("aria-pressed", String(tableFiguresEnabled));
+  toggle.setAttribute(
+    "aria-label",
+    tableFiguresEnabled ? "隱藏桌邊角色" : "顯示桌邊角色",
+  );
+  chess3DView?.setFigures(tableFiguresEnabled);
+  go3DView?.setFigures(tableFiguresEnabled);
+}
+$("#table-figures-toggle").onclick = () => {
+  tableFiguresEnabled = !tableFiguresEnabled;
+  store.set("qiju-table-figures", tableFiguresEnabled);
+  syncTableFigures();
+};
 function showChess3D(active: boolean): void {
   chess3DActive = active;
+  syncTableFigures();
   if (!active && state?.game === "chess") {
     focusedBoardCell = focusedChess3DCell;
     renderBoard();
@@ -510,6 +528,7 @@ let go3DPreferred = store.get("qiju-go-view") === "3d";
 let focusedGo3DCell = 40;
 function showGo3D(active: boolean): void {
   go3DActive = active;
+  syncTableFigures();
   if (!active && state?.game === "go") {
     focusedBoardCell = focusedGo3DCell;
     renderBoard();
@@ -2578,12 +2597,16 @@ function renderBoard(): void {
         .map((move) => move.to)
         .filter((index): index is number => index !== undefined),
       s.last,
+      s.turn,
+      s.winner !== null,
     );
   if (go3DActive && go3DView && s.game === "go")
     go3DView.update(
       s.board.map((piece) => (typeof piece === "number" ? piece : 0)),
       s.last?.to ?? null,
       s.dead,
+      s.turn,
+      s.winner !== null,
     );
 }
 $("#board").addEventListener("keydown", (event: KeyboardEvent) => {

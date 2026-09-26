@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { createTableFigures } from "./table-figures.js";
 
 export interface Chess3DView {
   update(
@@ -6,7 +7,10 @@ export interface Chess3DView {
     selected: number | null,
     legalTargets: readonly number[],
     last: { readonly from?: number; readonly to?: number } | null,
+    turn: number,
+    ended: boolean,
   ): void;
+  setFigures(visible: boolean): void;
   focus(index: number): void;
   resetMotion(): void;
   resize(): void;
@@ -48,6 +52,7 @@ export function createChess3DView(
   host.append(renderer.domElement);
 
   const scene = new THREE.Scene();
+  const figures = createTableFigures(scene);
   scene.background = new THREE.Color(0x263d34);
   const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 100);
   camera.position.set(0, 10.8, 10.2);
@@ -335,7 +340,12 @@ export function createChess3DView(
   resizeObserver.observe(host);
 
   return {
-    update(board, selected, legalTargets, last) {
+    setFigures(visible) {
+      figures.setVisible(visible);
+      renderer.render(scene, camera);
+    },
+    update(board, selected, legalTargets, last, turn, ended) {
+      figures.update(turn, ended);
       if (animationFrame !== null) cancelAnimationFrame(animationFrame);
       animationFrame = null;
       const before = previousBoard;
@@ -384,6 +394,7 @@ export function createChess3DView(
     },
     resize,
     dispose() {
+      figures.dispose();
       if (disposed) return;
       disposed = true;
       if (animationFrame !== null) cancelAnimationFrame(animationFrame);
