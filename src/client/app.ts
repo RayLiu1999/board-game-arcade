@@ -31,6 +31,7 @@ import {
 } from "../shared/protocol.js";
 import type { Difficulty } from "./ai.js";
 import type { Chess3DView } from "./chess-3d.js";
+import type { Go3DView } from "./go-3d.js";
 
 type Mode = "ai" | "local" | "online";
 type SetupMode = Mode | "matchmaking" | "rated";
@@ -500,6 +501,137 @@ $("#chess-3d-scene").addEventListener("keydown", (event: KeyboardEvent) => {
   else return;
   event.preventDefault();
   describeChess3DCell(nextRow * 8 + nextColumn);
+});
+let go3DView: Go3DView | null = null;
+let go3DActive = false;
+let go3DLoading = false;
+let go3DAwaitingSync = false;
+let go3DPreferred = store.get("qiju-go-view") === "3d";
+let focusedGo3DCell = 40;
+function showGo3D(active: boolean): void {
+  go3DActive = active;
+  if (!active && state?.game === "go") {
+    focusedBoardCell = focusedGo3DCell;
+    renderBoard();
+  }
+  $("#go-3d-scene").hidden = !active;
+  $(".board-wrap").hidden = active;
+  $("#play-screen").classList.toggle("go-3d-active", active);
+  const toggle = $("#go-3d-toggle");
+  toggle.setAttribute("aria-pressed", String(active));
+  toggle.textContent = active ? "返回 2D" : "3D 棋盤";
+  toggle.setAttribute(
+    "aria-label",
+    active ? "返回 2D 圍棋棋盤" : "開啟 3D 圍棋棋盤",
+  );
+  if (active) {
+    go3DView?.resize();
+    $("#go-3d-scene").focus({ preventScroll: true });
+  }
+}
+function describeGo3DCell(index: number): void {
+  focusedGo3DCell = index;
+  go3DView?.focus(index);
+  if (state?.game === "go")
+    $("#go-3d-coordinate").textContent = coordinate(state, index);
+  const label = $("#board")
+    .querySelector<HTMLElement>(`[data-cell="${String(index)}"]`)
+    ?.getAttribute("aria-label");
+  $("#go-3d-status").textContent = label ?? `棋盤位置 ${String(index + 1)}`;
+}
+function activateGo3DCell(index: number): void {
+  describeGo3DCell(index);
+  $("#board")
+    .querySelector<HTMLElement>(`[data-cell="${String(index)}"]`)
+    ?.click();
+  $("#go-3d-scene").focus({ preventScroll: true });
+}
+async function enableGo3D(): Promise<boolean> {
+  if (go3DLoading || state?.game !== "go") return false;
+  go3DLoading = true;
+  $("#go-3d-toggle").setAttribute("aria-busy", "true");
+  try {
+    const { createGo3DView } = await import("./go-3d.js");
+    const current = state;
+    if (
+      $("#play-screen").hidden ||
+      $("#play-screen").dataset.playGame !== "go" ||
+      current.game !== "go"
+    )
+      return false;
+    if (!go3DView) {
+      focusedGo3DCell =
+        Math.floor(current.rows / 2) * current.cols +
+        Math.floor(current.cols / 2);
+      go3DView = createGo3DView(
+        $("#go-3d-scene"),
+        current.rows,
+        activateGo3DCell,
+        (index) => {
+          describeGo3DCell(index);
+          $("#go-3d-status").textContent += "，再點一次確認";
+        },
+        () => {
+          showGo3D(false);
+          go3DView?.dispose();
+          go3DView = null;
+          go3DPreferred = false;
+          store.set("qiju-go-view", "2d");
+          toast("3D 畫面已中斷，已切回 2D 棋盤");
+        },
+      );
+    }
+    go3DView.resetMotion();
+    showGo3D(true);
+    renderBoard();
+    describeGo3DCell(focusedGo3DCell);
+    return true;
+  } catch {
+    showGo3D(false);
+    go3DView?.dispose();
+    go3DView = null;
+    go3DPreferred = false;
+    store.set("qiju-go-view", "2d");
+    toast("此裝置無法載入 3D 棋盤，已保留 2D 棋盤");
+    return false;
+  } finally {
+    go3DLoading = false;
+    $("#go-3d-toggle").removeAttribute("aria-busy");
+  }
+}
+$("#go-3d-toggle").onclick = async () => {
+  if (go3DActive) {
+    go3DPreferred = false;
+    store.set("qiju-go-view", "2d");
+    showGo3D(false);
+    return;
+  }
+  if (await enableGo3D()) {
+    go3DPreferred = true;
+    store.set("qiju-go-view", "3d");
+  }
+};
+$("#go-3d-scene").addEventListener("keydown", (event: KeyboardEvent) => {
+  const current = state;
+  if (!go3DActive || current?.game !== "go") return;
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    activateGo3DCell(focusedGo3DCell);
+    return;
+  }
+  const row = Math.floor(focusedGo3DCell / current.cols);
+  const column = focusedGo3DCell % current.cols;
+  let nextRow = row;
+  let nextColumn = column;
+  if (event.key === "ArrowUp") nextRow = Math.max(0, row - 1);
+  else if (event.key === "ArrowDown")
+    nextRow = Math.min(current.rows - 1, row + 1);
+  else if (event.key === "ArrowLeft") nextColumn = Math.max(0, column - 1);
+  else if (event.key === "ArrowRight")
+    nextColumn = Math.min(current.cols - 1, column + 1);
+  else return;
+  event.preventDefault();
+  describeGo3DCell(nextRow * current.cols + nextColumn);
 });
 const session = {
   get(): RoomResume | null {
@@ -1556,6 +1688,11 @@ function lobby() {
     chess3DView.dispose();
     chess3DView = null;
   }
+  if (go3DView) {
+    showGo3D(false);
+    go3DView.dispose();
+    go3DView = null;
+  }
   cancelAI();
   riichiWorker?.terminate();
   riichiWorker = null;
@@ -1592,6 +1729,7 @@ function showGame(): void {
   render();
   if (state.game === "chess" && chess3DPreferred && !chess3DActive)
     void enableChess3D();
+  if (state.game === "go" && go3DPreferred && !go3DActive) void enableGo3D();
   window.scrollTo(0, 0);
 }
 function startLocalRiichi(rounds = Number($("#riichi-rounds").value)): void {
@@ -1891,6 +2029,10 @@ function connect(): Promise<void> {
           chess3DView?.resetMotion();
           chess3DAwaitingSync = false;
         }
+        if (go3DAwaitingSync) {
+          go3DView?.resetMotion();
+          go3DAwaitingSync = false;
+        }
         if (fresh) showGame();
         else render();
       }
@@ -1923,6 +2065,7 @@ function connect(): Promise<void> {
     ws.onclose = (event) => {
       clearTimeout(timer);
       chess3DAwaitingSync = chess3DActive;
+      go3DAwaitingSync = go3DActive;
       if (event.code === 4001) {
         room = null;
         session.set(null);
@@ -2076,10 +2219,16 @@ function render(): void {
   if (!current) return;
   $("#play-screen").dataset.playGame = current.game;
   $("#chess-3d-toggle").hidden = current.game !== "chess";
+  $("#go-3d-toggle").hidden = current.game !== "go";
   if (current.game !== "chess" && chess3DView) {
     showChess3D(false);
     chess3DView.dispose();
     chess3DView = null;
+  }
+  if (current.game !== "go" && go3DView) {
+    showGo3D(false);
+    go3DView.dispose();
+    go3DView = null;
   }
   renderChat();
   const mahjong = current.game === "riichi";
@@ -2429,6 +2578,12 @@ function renderBoard(): void {
         .map((move) => move.to)
         .filter((index): index is number => index !== undefined),
       s.last,
+    );
+  if (go3DActive && go3DView && s.game === "go")
+    go3DView.update(
+      s.board.map((piece) => (typeof piece === "number" ? piece : 0)),
+      s.last?.to ?? null,
+      s.dead,
     );
 }
 $("#board").addEventListener("keydown", (event: KeyboardEvent) => {

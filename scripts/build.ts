@@ -1,5 +1,5 @@
 import { build } from "esbuild";
-import { copyFile } from "node:fs/promises";
+import { copyFile, rm } from "node:fs/promises";
 
 const browserOptions = {
   bundle: true,
@@ -40,15 +40,22 @@ await build({
   outfile: "public/riichi-ui.js",
 });
 
+await rm("public/chunks", { recursive: true, force: true });
 await build({
   ...browserOptions,
-  entryPoints: ["src/client/chess-3d.ts"],
-  outfile: "public/chess-3d.js",
+  entryPoints: {
+    "chess-3d": "src/client/chess-3d.ts",
+    "go-3d": "src/client/go-3d.ts",
+  },
+  outdir: "public",
+  entryNames: "[name]",
+  chunkNames: "chunks/[name]-[hash]",
+  splitting: true,
 });
 
 await build({
   ...browserOptions,
-  external: ["./chess-3d.js"],
+  external: ["./chess-3d.js", "./go-3d.js"],
   entryPoints: ["src/client/app.ts"],
   outfile: "public/app.js",
 });

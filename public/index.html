@@ -135,6 +135,15 @@
                 </button>
                 <button
                   class="table-view-toggle"
+                  id="go-3d-toggle"
+                  type="button"
+                  aria-pressed="false"
+                  hidden
+                >
+                  3D 棋盤
+                </button>
+                <button
+                  class="table-view-toggle"
                   id="table-view-toggle"
                   type="button"
                   aria-pressed="true"
@@ -170,6 +179,28 @@
               ></span>
               <span
                 id="chess-3d-status"
+                class="visually-hidden"
+                aria-live="polite"
+              ></span>
+            </div>
+            <div
+              id="go-3d-scene"
+              class="go-3d-scene"
+              role="group"
+              aria-label="3D 圍棋棋盤，使用方向鍵移動，Enter 落子或標記死棋"
+              tabindex="0"
+              hidden
+            >
+              <span
+                id="go-3d-coordinate"
+                class="chess-3d-coordinate"
+                aria-hidden="true"
+              ></span>
+              <span id="go-3d-touch-hint" class="go-3d-touch-hint" hidden
+                >點選交叉點預覽</span
+              >
+              <span
+                id="go-3d-status"
                 class="visually-hidden"
                 aria-live="polite"
               ></span>
