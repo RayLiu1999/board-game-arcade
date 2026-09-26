@@ -366,6 +366,8 @@ $("#mobile-chat-toggle").onclick = () => {
 let chess3DView: Chess3DView | null = null;
 let chess3DActive = false;
 let chess3DLoading = false;
+let chess3DAwaitingSync = false;
+let chess3DPreferred = store.get("qiju-chess-view") === "3d";
 let focusedChess3DCell = 52;
 function syncTableDepth(): void {
   $("#play-screen").classList.toggle("table-depth", tableDepthEnabled);
@@ -421,12 +423,8 @@ function activateChess3DCell(index: number): void {
     ?.click();
   $("#chess-3d-scene").focus({ preventScroll: true });
 }
-$("#chess-3d-toggle").onclick = async () => {
-  if (chess3DActive) {
-    showChess3D(false);
-    return;
-  }
-  if (chess3DLoading || state?.game !== "chess") return;
+async function enableChess3D(): Promise<boolean> {
+  if (chess3DLoading || state?.game !== "chess") return false;
   chess3DLoading = true;
   $("#chess-3d-toggle").setAttribute("aria-busy", "true");
   try {
@@ -435,7 +433,7 @@ $("#chess-3d-toggle").onclick = async () => {
       $("#play-screen").dataset.playGame !== "chess" ||
       $("#play-screen").hidden
     )
-      return;
+      return false;
     chess3DView ??= createChess3DView(
       $("#chess-3d-scene"),
       activateChess3DCell,
@@ -443,6 +441,8 @@ $("#chess-3d-toggle").onclick = async () => {
         showChess3D(false);
         chess3DView?.dispose();
         chess3DView = null;
+        chess3DPreferred = false;
+        store.set("qiju-chess-view", "2d");
         toast("3D 畫面已中斷，已切回 2D 棋盤");
       },
     );
@@ -450,14 +450,30 @@ $("#chess-3d-toggle").onclick = async () => {
     showChess3D(true);
     renderBoard();
     describeChess3DCell(focusedChess3DCell);
+    return true;
   } catch {
     showChess3D(false);
     chess3DView?.dispose();
     chess3DView = null;
+    chess3DPreferred = false;
+    store.set("qiju-chess-view", "2d");
     toast("此裝置無法載入 3D 棋盤，已保留 2D 棋盤");
+    return false;
   } finally {
     chess3DLoading = false;
     $("#chess-3d-toggle").removeAttribute("aria-busy");
+  }
+}
+$("#chess-3d-toggle").onclick = async () => {
+  if (chess3DActive) {
+    chess3DPreferred = false;
+    store.set("qiju-chess-view", "2d");
+    showChess3D(false);
+    return;
+  }
+  if (await enableChess3D()) {
+    chess3DPreferred = true;
+    store.set("qiju-chess-view", "3d");
   }
 };
 $("#chess-3d-scene").addEventListener("keydown", (event: KeyboardEvent) => {
@@ -1535,6 +1551,11 @@ function leaveRoom() {
   networkBusy = false;
 }
 function lobby() {
+  if (chess3DView) {
+    showChess3D(false);
+    chess3DView.dispose();
+    chess3DView = null;
+  }
   cancelAI();
   riichiWorker?.terminate();
   riichiWorker = null;
@@ -1569,6 +1590,8 @@ function showGame(): void {
   $("#play-screen").hidden = false;
   $("#crumb").textContent = GAMES[state.game].name;
   render();
+  if (state.game === "chess" && chess3DPreferred && !chess3DActive)
+    void enableChess3D();
   window.scrollTo(0, 0);
 }
 function startLocalRiichi(rounds = Number($("#riichi-rounds").value)): void {
@@ -1864,6 +1887,10 @@ function connect(): Promise<void> {
         human = msg.side;
         networkBusy = false;
         selected = null;
+        if (chess3DAwaitingSync) {
+          chess3DView?.resetMotion();
+          chess3DAwaitingSync = false;
+        }
         if (fresh) showGame();
         else render();
       }
@@ -1895,6 +1922,7 @@ function connect(): Promise<void> {
     };
     ws.onclose = (event) => {
       clearTimeout(timer);
+      chess3DAwaitingSync = chess3DActive;
       if (event.code === 4001) {
         room = null;
         session.set(null);

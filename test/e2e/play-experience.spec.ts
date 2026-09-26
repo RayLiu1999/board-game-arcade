@@ -117,6 +117,31 @@ test("3D chess table shares the same moves as the 2D board", async ({
   );
 });
 
+test("chess restores the chosen view after resuming a saved match", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.locator('[data-game="chess"]').click();
+  await page.locator('[data-mode="local"]').click();
+  await page.locator("#start-button").click();
+  await page.locator("#chess-3d-toggle").click();
+  await expect(page.locator("#chess-3d-scene canvas")).toBeVisible();
+  await expect(page.locator("#chess-3d-toggle")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+
+  await page.reload();
+  await page.locator("#resume-save").click();
+  await expect(page.locator("#chess-3d-scene canvas")).toBeVisible();
+  await page.locator("#chess-3d-toggle").click();
+  await expect(page.locator(".board-wrap")).toBeVisible();
+  await page.reload();
+  await page.locator("#resume-save").click();
+  await expect(page.locator(".board-wrap")).toBeVisible();
+  await expect(page.locator("#chess-3d-scene")).toBeHidden();
+});
+
 test("3D chess table accepts pointer moves on board squares", async ({
   page,
 }) => {
@@ -176,6 +201,9 @@ test("chess keeps the 2D board when WebGL is unavailable", async ({ page }) => {
   await expect(page.locator("#chess-3d-scene")).toBeHidden();
   await expect(page.locator(".board-wrap")).toBeVisible();
   await expect(page.locator("#toast")).toContainText("無法載入 3D 棋盤");
+  expect(
+    await page.evaluate(() => localStorage.getItem("qiju-chess-view")),
+  ).toBe('"2d"');
   await page.locator('#board [data-cell="52"]').click();
   await page.locator('#board [data-cell="36"]').click();
   await expect(page.locator("#move-count")).toHaveText("1 手");

@@ -73,6 +73,13 @@ test("players can create a room, join it, and make a move", async ({
     guest.locator('#board .cell[data-cell="36"] .piece'),
   ).toBeVisible();
 
+  await page.locator("#chess-3d-toggle").click();
+  await expect(page.locator("#chess-3d-scene canvas")).toBeVisible();
+  await page.reload();
+  await expect(page.locator("#room-code")).toHaveText(code);
+  await expect(page.locator("#chess-3d-scene canvas")).toBeVisible();
+  await expect(page.locator('#board [data-cell="36"] .piece')).toBeAttached();
+
   await guest.close();
   await guestContext.close();
 });
