@@ -45,3 +45,105 @@ test("table depth and keyboard board controls work during a local match", async 
   await expect(page.locator("#move-count")).toHaveText("1 手");
   await expect(destination).toBeFocused();
 });
+
+test("3D chess table shares the same moves as the 2D board", async ({
+  page,
+}) => {
+  const sceneRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/chess-3d.js"))
+      sceneRequests.push(request.url());
+  });
+  await page.goto("/");
+  await page.locator('[data-game="chess"]').click();
+  await page.locator('[data-mode="local"]').click();
+  await page.locator("#start-button").click();
+  expect(sceneRequests).toHaveLength(0);
+
+  await page.locator("#chess-3d-toggle").click();
+  const scene = page.locator("#chess-3d-scene");
+  await expect(scene).toBeVisible();
+  await expect(scene.locator("canvas")).toBeVisible();
+  expect(sceneRequests).toHaveLength(1);
+  await expect(page.locator(".board-wrap")).toBeHidden();
+  await expect(scene).toBeFocused();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(scene).toBeInViewport();
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  await page.keyboard.press("Enter");
+  await expect(page.locator('#board [data-cell="52"]')).toHaveClass(/selected/);
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#move-count")).toHaveText("1 手");
+
+  await page.locator("#chess-3d-toggle").click();
+  await expect(scene).toBeHidden();
+  await expect(page.locator(".board-wrap")).toBeVisible();
+  await expect(page.locator('#board [data-cell="36"] .piece')).toBeVisible();
+});
+
+test("3D chess table accepts pointer moves on board squares", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.locator('[data-game="chess"]').click();
+  await page.locator('[data-mode="local"]').click();
+  await page.locator("#start-button").click();
+  await page.locator("#chess-3d-toggle").click();
+  const canvas = page.locator("#chess-3d-scene canvas");
+  await expect(canvas).toBeVisible();
+
+  await canvas.click({ position: { x: 327, y: 406 } });
+  await expect(page.locator('#board [data-cell="52"]')).toHaveClass(/selected/);
+  await canvas.click({ position: { x: 323, y: 304 } });
+  await expect(page.locator("#move-count")).toHaveText("1 手");
+});
+
+test("3D chess table accepts touch moves on a phone viewport", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    hasTouch: true,
+    isMobile: true,
+  });
+  try {
+    const page = await context.newPage();
+    await page.goto("/");
+    await page.locator('[data-game="chess"]').click();
+    await page.locator('[data-mode="local"]').click();
+    await page.locator("#start-button").click();
+    await page.locator("#chess-3d-toggle").click();
+    const canvas = page.locator("#chess-3d-scene canvas");
+    await expect(canvas).toBeVisible();
+
+    await canvas.tap({ position: { x: 175, y: 217 } });
+    await expect(page.locator('#board [data-cell="52"]')).toHaveClass(
+      /selected/,
+    );
+    await canvas.tap({ position: { x: 173, y: 162 } });
+    await expect(page.locator("#move-count")).toHaveText("1 手");
+  } finally {
+    await context.close();
+  }
+});
+
+test("chess keeps the 2D board when WebGL is unavailable", async ({ page }) => {
+  await page.addInitScript(() => {
+    HTMLCanvasElement.prototype.getContext = () => null;
+  });
+  await page.goto("/");
+  await page.locator('[data-game="chess"]').click();
+  await page.locator('[data-mode="local"]').click();
+  await page.locator("#start-button").click();
+  await page.locator("#chess-3d-toggle").click();
+
+  await expect(page.locator("#chess-3d-scene")).toBeHidden();
+  await expect(page.locator(".board-wrap")).toBeVisible();
+  await expect(page.locator("#toast")).toContainText("無法載入 3D 棋盤");
+  await page.locator('#board [data-cell="52"]').click();
+  await page.locator('#board [data-cell="36"]').click();
+  await expect(page.locator("#move-count")).toHaveText("1 手");
+});

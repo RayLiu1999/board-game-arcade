@@ -30,6 +30,7 @@ import {
   type RoomMode,
 } from "../shared/protocol.js";
 import type { Difficulty } from "./ai.js";
+import type { Chess3DView } from "./chess-3d.js";
 
 type Mode = "ai" | "local" | "online";
 type SetupMode = Mode | "matchmaking" | "rated";
@@ -342,6 +343,10 @@ const store = {
   },
 };
 let tableDepthEnabled = store.get("qiju-table-depth") !== false;
+let chess3DView: Chess3DView | null = null;
+let chess3DActive = false;
+let chess3DLoading = false;
+let focusedChess3DCell = 52;
 function syncTableDepth(): void {
   $("#play-screen").classList.toggle("table-depth", tableDepthEnabled);
   const toggle = $("#table-view-toggle");
@@ -358,6 +363,100 @@ $("#table-view-toggle").onclick = () => {
   syncTableDepth();
 };
 syncTableDepth();
+function showChess3D(active: boolean): void {
+  chess3DActive = active;
+  $("#chess-3d-scene").hidden = !active;
+  $(".board-wrap").hidden = active;
+  $("#play-screen").classList.toggle("chess-3d-active", active);
+  const toggle = $("#chess-3d-toggle");
+  toggle.setAttribute("aria-pressed", String(active));
+  toggle.textContent = active ? "返回 2D" : "3D 棋盤";
+  toggle.setAttribute(
+    "aria-label",
+    active ? "返回 2D 棋盤" : "開啟 3D 西洋棋棋盤",
+  );
+  if (active) {
+    chess3DView?.resize();
+    $("#chess-3d-scene").focus({ preventScroll: true });
+  }
+}
+function describeChess3DCell(index: number): void {
+  focusedChess3DCell = index;
+  const label = $("#board")
+    .querySelector<HTMLElement>(`[data-cell="${String(index)}"]`)
+    ?.getAttribute("aria-label");
+  $("#chess-3d-status").textContent = label ?? `棋盤位置 ${String(index + 1)}`;
+}
+function activateChess3DCell(index: number): void {
+  describeChess3DCell(index);
+  $("#board")
+    .querySelector<HTMLElement>(`[data-cell="${String(index)}"]`)
+    ?.click();
+  $("#chess-3d-scene").focus({ preventScroll: true });
+}
+$("#chess-3d-toggle").onclick = async () => {
+  if (chess3DActive) {
+    showChess3D(false);
+    return;
+  }
+  if (chess3DLoading || state?.game !== "chess") return;
+  chess3DLoading = true;
+  $("#chess-3d-toggle").setAttribute("aria-busy", "true");
+  try {
+    const { createChess3DView } = await import("./chess-3d.js");
+    if (
+      $("#play-screen").dataset.playGame !== "chess" ||
+      $("#play-screen").hidden
+    )
+      return;
+    chess3DView ??= createChess3DView(
+      $("#chess-3d-scene"),
+      activateChess3DCell,
+      () => {
+        showChess3D(false);
+        chess3DView?.dispose();
+        chess3DView = null;
+        toast("3D 畫面已中斷，已切回 2D 棋盤");
+      },
+    );
+    showChess3D(true);
+    renderBoard();
+    describeChess3DCell(focusedChess3DCell);
+  } catch {
+    showChess3D(false);
+    chess3DView?.dispose();
+    chess3DView = null;
+    toast("此裝置無法載入 3D 棋盤，已保留 2D 棋盤");
+  } finally {
+    chess3DLoading = false;
+    $("#chess-3d-toggle").removeAttribute("aria-busy");
+  }
+};
+$("#chess-3d-scene").addEventListener("keydown", (event: KeyboardEvent) => {
+  if (!chess3DActive || state?.game !== "chess") return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    selected = null;
+    renderBoard();
+    return;
+  }
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    activateChess3DCell(focusedChess3DCell);
+    return;
+  }
+  const row = Math.floor(focusedChess3DCell / 8);
+  const column = focusedChess3DCell % 8;
+  let nextRow = row;
+  let nextColumn = column;
+  if (event.key === "ArrowUp") nextRow = Math.max(0, row - 1);
+  else if (event.key === "ArrowDown") nextRow = Math.min(7, row + 1);
+  else if (event.key === "ArrowLeft") nextColumn = Math.max(0, column - 1);
+  else if (event.key === "ArrowRight") nextColumn = Math.min(7, column + 1);
+  else return;
+  event.preventDefault();
+  describeChess3DCell(nextRow * 8 + nextColumn);
+});
 const session = {
   get(): RoomResume | null {
     try {
@@ -1913,6 +2012,12 @@ function render(): void {
   const current = state;
   if (!current) return;
   $("#play-screen").dataset.playGame = current.game;
+  $("#chess-3d-toggle").hidden = current.game !== "chess";
+  if (current.game !== "chess" && chess3DView) {
+    showChess3D(false);
+    chess3DView.dispose();
+    chess3DView = null;
+  }
   renderChat();
   const mahjong = current.game === "riichi";
   $(".play-layout").hidden = mahjong;
@@ -2252,6 +2357,15 @@ function renderBoard(): void {
         `#${activeDropHand} [data-drop="${activeDropIndex}"]`,
       )
       ?.focus({ preventScroll: true });
+  if (chess3DActive && chess3DView && s.game === "chess")
+    chess3DView.update(
+      s.board.map((piece) => (typeof piece === "string" ? piece : "")),
+      typeof selected === "number" ? selected : null,
+      targets
+        .map((move) => move.to)
+        .filter((index): index is number => index !== undefined),
+      s.last,
+    );
 }
 $("#board").addEventListener("keydown", (event: KeyboardEvent) => {
   const target = event.target as HTMLElement;

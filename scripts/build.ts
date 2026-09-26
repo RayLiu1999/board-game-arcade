@@ -42,6 +42,13 @@ await build({
 
 await build({
   ...browserOptions,
+  entryPoints: ["src/client/chess-3d.ts"],
+  outfile: "public/chess-3d.js",
+});
+
+await build({
+  ...browserOptions,
+  external: ["./chess-3d.js"],
   entryPoints: ["src/client/app.ts"],
   outfile: "public/app.js",
 });
@@ -57,5 +64,6 @@ for (const name of ["majiang-core", "majiang-ai"])
     `node_modules/@kobalab/${name}/LICENSE`,
     `public/vendor/${name}-LICENSE`,
   );
+await copyFile("node_modules/three/LICENSE", "public/vendor/three-LICENSE");
 
 console.log("共用 TS 引擎、將棋模組、日麻 Worker 與第三方授權已更新");

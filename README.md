@@ -137,6 +137,8 @@ PostgreSQL migration 會在伺服器啟動時自動初始化。日麻 live sessi
 
 日麻 Worker 已打包在 `public/riichi-worker.js`。修改 `lib/riichi-session.ts`、`src/riichi-worker.ts`、`src/shared/` 或更新套件後執行 `pnpm run build`。不需 CDN。
 
+西洋棋對局可切換至 3D 棋盤原型；3D 資源只在玩家開啟時載入，操作仍走同一份棋規與房間流程。WebGL 不可用或載入失敗時會保留 2D 棋盤。`pnpm run build` 會另外產生 `public/chess-3d.js`，不使用 CDN。
+
 ## 測試
 
 ```sh
@@ -181,6 +183,8 @@ public/index.html        大廳、設定及對局畫面
 public/style.css         桌機與手機排版
 src/client/app.ts        前端流程、狀態管理與 WebSocket 原始碼
 public/app.js            由 src/client/app.ts 產生的瀏覽器 bundle
+src/client/chess-3d.ts   西洋棋 3D 棋盤原始碼
+public/chess-3d.js      按需載入的 3D 棋盤 bundle
 public/engine.js         由 src/shared/engine.ts 產生的瀏覽器 bundle
 public/shogi.js          由 src/shared/shogi.ts 產生的瀏覽器 bundle
 lib/riichi-session.ts    日麻權威對局、合法選項與各座位私密視圖
@@ -198,6 +202,7 @@ public/vendor/chess.js   鎖定的 chess.js 1.4.0 瀏覽器模組
 public/vendor/CHESS-LICENSE
 test/                   棋規與真實 WebSocket 整合測試
 test/e2e/room.spec.ts   Playwright 建立房間、加入房間與落子同步流程
+test/e2e/play-experience.spec.ts 2D／3D 操作、指標落子與 WebGL 回退
 ```
 
 chess.js 的瀏覽器版本已附於專案內（BSD-2-Clause 授權亦附上）。更新 chess.js 套件時，請同步更新 `public/vendor/chess.js` 與授權，並執行測試。依賴與 API 參考：[chess.js](https://github.com/jhlywa/chess.js)、[ws](https://github.com/websockets/ws)。

@@ -2754,3 +2754,45 @@ select {
       0 8px 16px #2b32232c;
   }
 }
+
+.chess-3d-scene {
+  position: relative;
+  width: 100%;
+  max-width: 600px;
+  margin: 6px auto;
+  overflow: hidden;
+  aspect-ratio: 1;
+  border: 8px solid #7c6148;
+  border-radius: 10px;
+  background: #263d34;
+  box-shadow:
+    0 5px 0 #574333,
+    0 20px 32px #25392d3d;
+}
+.chess-3d-scene canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: manipulation;
+}
+.chess-3d-scene:focus-visible {
+  outline: 3px solid #b09d55;
+  outline-offset: 4px;
+}
+#play-screen.chess-3d-active #table-view-toggle {
+  display: none;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+@media (max-width: 650px) {
+  .chess-3d-scene {
+    border-width: 5px;
+  }
+}

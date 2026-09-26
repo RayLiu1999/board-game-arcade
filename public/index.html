@@ -126,6 +126,15 @@
               <div class="board-tools">
                 <button
                   class="table-view-toggle"
+                  id="chess-3d-toggle"
+                  type="button"
+                  aria-pressed="false"
+                  hidden
+                >
+                  3D 棋盤
+                </button>
+                <button
+                  class="table-view-toggle"
                   id="table-view-toggle"
                   type="button"
                   aria-pressed="true"
@@ -145,6 +154,20 @@
             <div id="opponent-hand" class="shogi-hand" hidden></div>
             <div class="board-wrap">
               <div id="board" role="group" aria-label="棋盤"></div>
+            </div>
+            <div
+              id="chess-3d-scene"
+              class="chess-3d-scene"
+              role="group"
+              aria-label="3D 西洋棋棋盤，使用方向鍵移動，Enter 選取或走棋，Escape 取消"
+              tabindex="0"
+              hidden
+            >
+              <span
+                id="chess-3d-status"
+                class="visually-hidden"
+                aria-live="polite"
+              ></span>
             </div>
             <div id="self-hand" class="shogi-hand" hidden></div>
             <div class="player-row" id="self-row"></div>
